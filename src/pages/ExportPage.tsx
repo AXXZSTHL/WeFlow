@@ -2311,7 +2311,7 @@ function ExportPage() {
     exportVideos: true,
     exportEmojis: true,
     exportFiles: true,
-    maxFileSizeMb: 200,
+    maxFileSizeMb: 500,
     exportVoiceAsText: false,
     excelCompactColumns: true,
     txtColumns: defaultTxtColumns,
