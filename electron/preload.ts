@@ -481,6 +481,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('export:cancelTask', taskId),
     exportSession: (sessionId: string, outputPath: string, options: any) =>
       ipcRenderer.invoke('export:exportSession', sessionId, outputPath, options),
+    exportChatRecordToWord: (payload: any, outputPath: string) =>
+      ipcRenderer.invoke('export:exportChatRecordToWord', payload, outputPath),
     exportContacts: (outputDir: string, options: any) =>
       ipcRenderer.invoke('export:exportContacts', outputDir, options),
     onProgress: (callback: (payload: {

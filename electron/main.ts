@@ -3300,6 +3300,15 @@ function registerIpcHandlers() {
     }
   })
 
+  ipcMain.handle('export:exportChatRecordToWord', async (_, payload: any, outputPath: string) => {
+    try {
+      if (!outputPath || typeof outputPath !== 'string') return { success: false, error: '缺少导出路径' }
+      return await exportService.exportChatRecordToWord(payload || {}, outputPath)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
   ipcMain.handle('export:exportContacts', async (_, outputDir: string, options: any) => {
     const cfg = configService || new ConfigService()
     configService = cfg

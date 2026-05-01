@@ -1112,6 +1112,10 @@ export interface ElectronAPI {
       success: boolean
       error?: string
     }>
+    exportChatRecordToWord: (payload: { title?: string; recordList: ChatRecordItem[] }, outputPath: string) => Promise<{
+      success: boolean
+      error?: string
+    }>
     exportContacts: (outputDir: string, options: { format: 'json' | 'csv' | 'vcf'; exportAvatars: boolean; contactTypes: { friends: boolean; groups: boolean; officials: boolean }; selectedUsernames?: string[] }) => Promise<{
       success: boolean
       successCount?: number

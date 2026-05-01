@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Search, MessageSquare, AlertCircle, Loader2, RefreshCw, X, ChevronDown, ChevronLeft, Info, Calendar, Database, Hash, Play, Pause, Image as ImageIcon, Mic, CheckCircle, Copy, Check, CheckSquare, Download, BarChart3, Edit2, Trash2, BellOff, Users, FolderClosed, UserCheck, Crown, Aperture, Newspaper } from 'lucide-react'
+import { Search, MessageSquare, AlertCircle, Loader2, RefreshCw, X, ChevronDown, ChevronLeft, Info, Calendar, Database, Hash, Play, Pause, Image as ImageIcon, Mic, CheckCircle, Copy, Check, CheckSquare, Download, FileText, BarChart3, Edit2, Trash2, BellOff, Users, FolderClosed, UserCheck, Crown, Aperture, Newspaper } from 'lucide-react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { createPortal } from 'react-dom'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
@@ -6477,6 +6477,38 @@ function ChatPage(props: ChatPageProps) {
     }
   }, [contextMenu])
 
+  const handleExportChatRecordToWord = useCallback(async () => {
+    const msg = contextMenu?.message
+    if (!msg || !currentSessionId) return
+    const recordList = Array.isArray(msg.chatRecordList) ? msg.chatRecordList : []
+    if (recordList.length === 0) {
+      alert('该聊天合集没有可导出的记录')
+      setContextMenu(null)
+      return
+    }
+
+    const rawTitle = String(msg.chatRecordTitle || '聊天合集').trim() || '聊天合集'
+    const safeTitle = rawTitle.replace(/[\\/:*?"<>|]/g, '_').slice(0, 80)
+    const downloadsPath = await window.electronAPI.app.getDownloadsPath().catch(() => '')
+    const separator = downloadsPath && downloadsPath.includes('\\') ? '\\' : '/'
+    const defaultPath = downloadsPath ? `${downloadsPath}${separator}${safeTitle}.docx` : `${safeTitle}.docx`
+    const saveResult = await window.electronAPI.dialog.saveFile({
+      title: '导出聊天合集为 Word',
+      defaultPath,
+      filters: [{ name: 'Word 文档', extensions: ['docx'] }]
+    })
+    if (!saveResult || saveResult.canceled || !saveResult.filePath) return
+
+    const result = await window.electronAPI.export.exportChatRecordToWord({
+      title: rawTitle,
+      recordList
+    }, saveResult.filePath)
+    if (!result.success) {
+      alert(`导出失败: ${result.error || '原因未知'}`)
+    }
+    setContextMenu(null)
+  }, [contextMenu, currentSessionId])
+
   // 确认修改消息
   const handleSaveEdit = useCallback(async () => {
     if (editingMessage && currentSessionId) {
@@ -7891,6 +7923,12 @@ function ChatPage(props: ChatPageProps) {
               <Edit2 size={16} />
               <span>{contextMenu.message.localType === 1 ? '修改消息' : '编辑源码'}</span>
             </div>
+            {Array.isArray(contextMenu.message.chatRecordList) && contextMenu.message.chatRecordList.length > 0 && (
+              <div className="menu-item" onClick={handleExportChatRecordToWord}>
+                <FileText size={16} />
+                <span>导出聊天合集为 Word</span>
+              </div>
+            )}
             <div className="menu-item" onClick={() => {
               setIsSelectionMode(true)
               setSelectedMessages(new Set<string>([getMessageKey(contextMenu.message)]))

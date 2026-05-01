@@ -5,6 +5,7 @@ import * as https from 'https'
 import crypto from 'crypto'
 import { fileURLToPath } from 'url'
 import ExcelJS from 'exceljs'
+import JSZip from 'jszip'
 import { getEmojiPath } from 'wechat-emojis'
 import { ConfigService } from './config'
 import { wcdbService } from './wcdbService'
@@ -4149,7 +4150,8 @@ class ExportService {
       await this.ensureExportDir(imagesDir, control, dirCache)
 
       const tryResolveImagePath = async (imageMd5?: string, imageDatName?: string): Promise<string | null> => {
-        if (!imageMd5 && !imageDatName) return null
+        const localId = Number(msg?.localId || 0)
+        if (!imageMd5 && !imageDatName && (!Number.isFinite(localId) || localId <= 0)) return null
         return this.runWithChatImagePipelineLimit(async () => {
           const pickResolvedImagePath = (result: any): string | null => {
             if (!result?.success) return null
@@ -4158,6 +4160,7 @@ class ExportService {
           }
 
           const resolveCachedPath = async (candidateMd5?: string, candidateDatName?: string): Promise<string | null> => {
+            if (!candidateMd5 && !candidateDatName) return null
             const cachedResult = await imageDecryptService.resolveCachedImage({
               sessionId,
               imageMd5: candidateMd5,
@@ -4177,20 +4180,22 @@ class ExportService {
             return cachedPath
           }
 
-          const decryptResult = await imageDecryptService.decryptImage({
-            sessionId,
-            imageMd5,
-            imageDatName,
-            createTime: msg.createTime,
-            force: false,
-            preferFilePath: true,
-            hardlinkOnly: true,
-            allowCacheIndex: true
-          })
-          const decryptedPath = pickResolvedImagePath(decryptResult)
-          if (decryptedPath) return decryptedPath
+          let decryptResult: any = null
+          if (imageMd5 || imageDatName) {
+            decryptResult = await imageDecryptService.decryptImage({
+              sessionId,
+              imageMd5,
+              imageDatName,
+              createTime: msg.createTime,
+              force: false,
+              preferFilePath: true,
+              hardlinkOnly: true,
+              allowCacheIndex: true
+            })
+            const decryptedPath = pickResolvedImagePath(decryptResult)
+            if (decryptedPath) return decryptedPath
+          }
 
-          const localId = Number(msg?.localId || 0)
           if (Number.isFinite(localId) && localId > 0) {
             const fallback = await chatService.getImageData(sessionId, String(localId))
             if (fallback.success && fallback.data) {
@@ -4200,7 +4205,7 @@ class ExportService {
             }
           }
 
-          if (decryptResult.failureKind === 'decrypt_failed') {
+          if (decryptResult?.failureKind === 'decrypt_failed') {
             console.log(`[Export] 图片解密失败 (localId=${msg.localId}): imageMd5=${imageMd5 || ''}, imageDatName=${imageDatName || ''}, error=${decryptResult.error || '未知'}`)
           } else {
             console.log(`[Export] 图片本地无数据 (localId=${msg.localId}): imageMd5=${imageMd5 || ''}, imageDatName=${imageDatName || ''}, error=${decryptResult.error || '未知'}`)
@@ -4570,8 +4575,74 @@ class ExportService {
    */
   private extractImageMd5(content: string): string | undefined {
     if (!content) return undefined
-    const match = /md5="([^"]+)"/i.exec(content)
-    return match?.[1]
+    const byTag = this.extractXmlValue(content, 'md5') || this.extractXmlValue(content, 'imgmd5')
+    if (byTag) return String(byTag).trim().toLowerCase()
+    const match = /(?:md5|imgmd5)\s*=\s*['"]?([a-fA-F0-9]{16,64})['"]?/i.exec(content)
+    return match?.[1]?.toLowerCase()
+  }
+
+  private extractHexMd5(content: unknown): string | undefined {
+    const input = String(content || '')
+    if (!input) return undefined
+    const match = /([a-fA-F0-9]{32})/.exec(input)
+    return match?.[1]?.toLowerCase()
+  }
+
+  private decodePackedToPrintable(raw: unknown): string {
+    const buffer = this.decodePackedInfoBuffer(raw)
+    if (!buffer || buffer.length === 0) return ''
+    const printable: number[] = []
+    for (const byte of buffer) {
+      printable.push(byte >= 0x20 && byte <= 0x7e ? byte : 0x20)
+    }
+    return Buffer.from(printable).toString('utf-8')
+  }
+
+  private getPackedInfoRaw(row: Record<string, any>): unknown {
+    return this.getRowField(row, [
+      'packed_info_data',
+      'packedInfoData',
+      'packed_info_blob',
+      'packedInfoBlob',
+      'packed_info',
+      'packedInfo',
+      'PackedInfo',
+      'BytesExtra',
+      'bytes_extra',
+      'WCDB_CT_packed_info',
+      'reserved0',
+      'Reserved0',
+      'WCDB_CT_Reserved0'
+    ])
+  }
+
+  private extractPackedPayload(row: Record<string, any>): string {
+    return this.decodePackedToPrintable(this.getPackedInfoRaw(row))
+  }
+
+  private extractMessageContentFromRow(row: Record<string, any>): string {
+    const rawMessageContent = this.getRowField(row, [
+      'message_content',
+      'messageContent',
+      'message_content_text',
+      'messageText',
+      'StrContent',
+      'str_content',
+      'msg_content',
+      'msgContent',
+      'strContent',
+      'content',
+      'rawContent',
+      'WCDB_CT_message_content'
+    ]) ?? ''
+    const rawCompressContent = this.getRowField(row, [
+      'compress_content',
+      'compressContent',
+      'msg_compress_content',
+      'msgCompressContent',
+      'WCDB_CT_compress_content'
+    ]) ?? ''
+    return this.decodeMessageContent(rawMessageContent, rawCompressContent)
   }
 
   /**
@@ -4644,21 +4715,7 @@ class ExportService {
     ]))
     if (byColumn) return byColumn
 
-    const packedRaw = this.getRowField(row, [
-      'packed_info_data',
-      'packedInfoData',
-      'packed_info_blob',
-      'packedInfoBlob',
-      'packed_info',
-      'packedInfo',
-      'BytesExtra',
-      'bytes_extra',
-      'WCDB_CT_packed_info',
-      'reserved0',
-      'Reserved0',
-      'WCDB_CT_Reserved0'
-    ])
-    const byPacked = this.extractImageDatNameFromPackedRaw(packedRaw)
+    const byPacked = this.extractImageDatNameFromPackedRaw(this.getPackedInfoRaw(row))
     if (byPacked) return byPacked
 
     return this.extractImageDatName(content || '')
@@ -4701,12 +4758,14 @@ class ExportService {
 
   private extractVideoMd5(content: string): string | undefined {
     if (!content) return undefined
-    const attrMatch = /<videomsg[^>]*\smd5\s*=\s*['"]([a-fA-F0-9]+)['"]/i.exec(content)
-    if (attrMatch) {
-      return attrMatch[1].toLowerCase()
-    }
-    const tagMatch = /<md5>([^<]+)<\/md5>/i.exec(content)
-    return tagMatch?.[1]?.toLowerCase()
+    const byTag =
+      this.extractXmlValue(content, 'rawmd5') ||
+      this.extractXmlValue(content, 'videomd5') ||
+      this.extractXmlValue(content, 'newmd5') ||
+      this.extractXmlValue(content, 'md5')
+    if (byTag) return byTag.toLowerCase()
+    const attrMatch = /(?:rawmd5|videomd5|newmd5|md5)\s*=\s*['"]?([a-fA-F0-9]{16,64})['"]?/i.exec(content)
+    return attrMatch?.[1]?.toLowerCase()
   }
 
   private decodePackedInfoBuffer(raw: unknown): Buffer | null {
@@ -4779,15 +4838,7 @@ class ExportService {
   }
 
   private extractVideoFileNameFromRow(row: Record<string, any>, content?: string): string | undefined {
-    const packedRaw = this.getRowField(row, [
-      'packed_info_data', 'packedInfoData',
-      'packed_info_blob', 'packedInfoBlob',
-      'packed_info', 'packedInfo',
-      'BytesExtra', 'bytes_extra',
-      'WCDB_CT_packed_info',
-      'reserved0', 'Reserved0', 'WCDB_CT_Reserved0'
-    ])
-    const byPacked = this.extractVideoFileNameFromPackedRaw(packedRaw)
+    const byPacked = this.extractVideoFileNameFromPackedRaw(this.getPackedInfoRaw(row))
     if (byPacked) return byPacked
 
     const byColumn = this.normalizeVideoFileToken(this.getRowField(row, [
@@ -5830,20 +5881,19 @@ class ExportService {
         if (!detail.success || !detail.message) return
 
         const row = detail.message as any
-        const rawMessageContent = this.getRowField(row, [
-          'message_content', 'messageContent', 'msg_content', 'msgContent', 'strContent', 'content', 'WCDB_CT_message_content'
-        ]) ?? ''
-        const rawCompressContent = this.getRowField(row, [
-          'compress_content', 'compressContent', 'msg_compress_content', 'msgCompressContent', 'WCDB_CT_compress_content'
-        ]) ?? ''
-        const content = this.decodeMessageContent(rawMessageContent, rawCompressContent)
-        const packedInfoRaw = this.getRowField(row, ['packed_info', 'packedInfo', 'PackedInfo', 'WCDB_CT_packed_info']) ?? ''
-        const reserved0Raw = this.getRowField(row, ['reserved0', 'Reserved0', 'WCDB_CT_Reserved0']) ?? ''
-        const supplementalPayload = `${this.decodeMaybeCompressed(String(packedInfoRaw || ''))}\n${this.decodeMaybeCompressed(String(reserved0Raw || ''))}`
+        const content = this.extractMessageContentFromRow(row)
+        const packedPayload = this.extractPackedPayload(row)
+        const supplementalPayload = `${content}\n${packedPayload}`
 
         if (msg.localType === 3) {
-          const imageMd5 = (String(row.image_md5 || row.imageMd5 || '').trim() || this.extractImageMd5(content) || '').toLowerCase()
-          const imageDatName = this.extractImageDatNameFromRow(row, content) || ''
+          const imageMd5 = (
+            String(this.getRowField(row, ['image_md5', 'imageMd5']) || '').trim() ||
+            this.extractImageMd5(content) ||
+            this.extractHexMd5(packedPayload) ||
+            this.extractHexMd5(supplementalPayload) ||
+            ''
+          ).toLowerCase()
+          const imageDatName = this.extractImageDatNameFromRow(row, content) || this.extractHexMd5(packedPayload) || ''
           if (imageMd5) msg.imageMd5 = imageMd5
           if (imageDatName) msg.imageDatName = imageDatName
           return
@@ -5865,7 +5915,13 @@ class ExportService {
         }
 
         if (msg.localType === 43) {
-          const videoMd5 = String(this.extractVideoFileNameFromRow(row, content) || '').trim().toLowerCase()
+          const videoMd5 = String(
+            this.extractVideoFileNameFromRow(row, content) ||
+            this.normalizeVideoFileToken(this.getRowField(row, ['video_md5', 'videoMd5', 'raw_md5', 'rawMd5'])) ||
+            this.normalizeVideoFileToken(this.extractVideoMd5(content)) ||
+            this.extractHexMd5(packedPayload) ||
+            ''
+          ).trim().toLowerCase()
           if (videoMd5) msg.videoMd5 = videoMd5
           return
         }
@@ -6834,6 +6890,116 @@ class ExportService {
       }
       return { success: false, error: String(e) }
     }
+  }
+
+  async exportChatRecordToWord(
+    payload: { title?: string; recordList?: ForwardChatRecordItem[] },
+    outputPath: string
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const title = String(payload?.title || '聊天合集').trim() || '聊天合集'
+      const recordList = Array.isArray(payload?.recordList) ? payload.recordList : []
+      if (recordList.length === 0) return { success: false, error: '聊天合集为空，无法导出' }
+
+      await fs.promises.mkdir(path.dirname(outputPath), { recursive: true })
+      const zip = new JSZip()
+      zip.file('[Content_Types].xml', this.buildDocxContentTypesXml())
+      zip.folder('_rels')?.file('.rels', this.buildDocxRootRelsXml())
+      const word = zip.folder('word')
+      word?.file('document.xml', this.buildChatRecordDocxDocumentXml(title, recordList))
+      word?.folder('_rels')?.file('document.xml.rels', this.buildDocxDocumentRelsXml())
+      word?.file('styles.xml', this.buildDocxStylesXml())
+
+      const buffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
+      await fs.promises.writeFile(outputPath, buffer)
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  private buildDocxContentTypesXml(): string {
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>`
+  }
+
+  private buildDocxRootRelsXml(): string {
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`
+  }
+
+  private buildDocxDocumentRelsXml(): string {
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`
+  }
+
+  private buildDocxStylesXml(): string {
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:rPr><w:rFonts w:ascii="Microsoft YaHei" w:eastAsia="Microsoft YaHei"/><w:sz w:val="21"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:rPr><w:b/><w:sz w:val="32"/></w:rPr></w:style></w:styles>`
+  }
+
+  private buildChatRecordDocxDocumentXml(title: string, recordList: ForwardChatRecordItem[]): string {
+    const body = [
+      this.buildDocxParagraph(title, { bold: true, size: 32, after: 240 }),
+      this.buildDocxParagraph(`共 ${recordList.length} 条聊天记录`, { color: '666666', size: 20, after: 240 }),
+      ...recordList.flatMap((item) => this.buildChatRecordDocxParagraphs(item, 0))
+    ].join('')
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr></w:body></w:document>`
+  }
+
+  private buildChatRecordDocxParagraphs(item: ForwardChatRecordItem, depth: number): string[] {
+    const indent = Math.min(depth, 8) * 420
+    const time = this.formatForwardChatRecordTime(item.sourcetime)
+    const sender = String(item.sourcename || '未知发送者').trim()
+    const text = item.chatRecordList && item.chatRecordList.length > 0
+      ? `[聊天合集] ${item.chatRecordTitle || item.datatitle || item.chatRecordDesc || ''}`.trim()
+      : this.formatForwardChatRecordItemText(item)
+    const paragraphs = [
+      this.buildDocxParagraph(`${sender}${time ? `  ${time}` : ''}`, { color: '666666', size: 18, before: 100, indent }),
+      this.buildDocxParagraph(text, { size: 22, after: 80, indent })
+    ]
+    if (item.chatRecordList && item.chatRecordList.length > 0) {
+      paragraphs.push(...item.chatRecordList.flatMap((child) => this.buildChatRecordDocxParagraphs(child, depth + 1)))
+    }
+    return paragraphs
+  }
+
+  private buildDocxParagraph(text: string, options?: { bold?: boolean; color?: string; size?: number; before?: number; after?: number; indent?: number }): string {
+    const escaped = this.escapeXmlText(text || '')
+    const pPr: string[] = []
+    if (options?.before || options?.after) pPr.push(`<w:spacing${options.before ? ` w:before="${options.before}"` : ''}${options.after ? ` w:after="${options.after}"` : ''}/>`)
+    if (options?.indent) pPr.push(`<w:ind w:left="${options.indent}"/>`)
+    const rPr = [
+      '<w:rFonts w:ascii="Microsoft YaHei" w:eastAsia="Microsoft YaHei"/>',
+      options?.bold ? '<w:b/>' : '',
+      options?.color ? `<w:color w:val="${options.color}"/>` : '',
+      options?.size ? `<w:sz w:val="${options.size}"/>` : ''
+    ].join('')
+    return `<w:p>${pPr.length ? `<w:pPr>${pPr.join('')}</w:pPr>` : ''}<w:r><w:rPr>${rPr}</w:rPr><w:t xml:space="preserve">${escaped}</w:t></w:r></w:p>`
+  }
+
+  private escapeXmlText(value: string): string {
+    return String(value || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&apos;')
+  }
+
+  private formatForwardChatRecordTime(value?: string): string {
+    const raw = String(value || '').trim()
+    if (!raw) return ''
+    const num = Number(raw)
+    if (Number.isFinite(num) && num > 0) {
+      const date = new Date((num > 1e12 ? num : num * 1000))
+      if (!Number.isNaN(date.getTime())) {
+        const pad = (v: number) => String(v).padStart(2, '0')
+        return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+      }
+    }
+    return raw
   }
 
   /**
@@ -9226,36 +9392,26 @@ class ExportService {
           this.batchSize = 100;
           this.rendered = 0;
           this.loading = false;
-
           this.list = document.createElement('div');
-          this.list.className = 'message-list';
+          this.list.className = 'chat-list';
           this.container.appendChild(this.list);
-
           this.sentinel = document.createElement('div');
           this.sentinel.className = 'load-sentinel';
           this.container.appendChild(this.sentinel);
-
-          this.renderBatch();
-
           this.observer = new IntersectionObserver((entries) => {
-            if (entries[0].isIntersecting && !this.loading) {
-              this.renderBatch();
-            }
+            if (entries[0].isIntersecting && !this.loading) this.renderBatch();
           }, { root: this.container, rootMargin: '600px' });
           this.observer.observe(this.sentinel);
+          this.renderBatch();
         }
 
         renderBatch() {
           if (this.rendered >= this.data.length) return;
           this.loading = true;
           const end = Math.min(this.rendered + this.batchSize, this.data.length);
-          const fragment = document.createDocumentFragment();
-          for (let i = this.rendered; i < end; i++) {
-            const wrapper = document.createElement('div');
-            wrapper.innerHTML = this.renderItem(this.data[i], i);
-            if (wrapper.firstElementChild) fragment.appendChild(wrapper.firstElementChild);
-          }
-          this.list.appendChild(fragment);
+          const html = [];
+          for (let i = this.rendered; i < end; i++) html.push(this.renderItem(this.data[i], i));
+          this.list.insertAdjacentHTML('beforeend', html.join(''));
           this.rendered = end;
           this.loading = false;
         }
@@ -9266,7 +9422,7 @@ class ExportService {
           this.list.innerHTML = '';
           this.container.scrollTop = 0;
           if (this.data.length === 0) {
-            this.list.innerHTML = '<div class="empty">暂无消息</div>';
+            this.list.innerHTML = '<div class="empty-hint">没有找到匹配消息</div>';
             return;
           }
           this.renderBatch();
@@ -9275,26 +9431,20 @@ class ExportService {
         scrollToTime(timestamp) {
           const idx = this.data.findIndex(item => item.t >= timestamp);
           if (idx === -1) return;
-          // Ensure all messages up to target are rendered
-          while (this.rendered <= idx) {
-            this.renderBatch();
-          }
-          const el = this.list.children[idx];
+          while (this.rendered <= idx) this.renderBatch();
+          const el = this.list.querySelector('[data-idx="' + this.data[idx].i + '"]');
           if (el) {
             el.scrollIntoView({ behavior: 'smooth', block: 'center' });
             el.classList.add('highlight');
-            setTimeout(() => el.classList.remove('highlight'), 2500);
+            setTimeout(() => el.classList.remove('highlight'), 2400);
           }
         }
 
         scrollToIndex(index) {
-          while (this.rendered <= index) {
-            this.renderBatch();
-          }
-          const el = this.list.children[index];
-          if (el) {
-            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          }
+          while (this.rendered <= index) this.renderBatch();
+          const item = this.data[index];
+          const el = item ? this.list.querySelector('[data-idx="' + item.i + '"]') : null;
+          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
       }
     `;
@@ -9542,45 +9692,86 @@ class ExportService {
 
       await writePromise(`<!DOCTYPE html>
 <html lang="zh-CN">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>${this.escapeHtml(sessionInfo.displayName)} - 聊天记录</title>
-    <style>${htmlStyles}</style>
-  </head>
-  <body>
-    <div class="page">
-      <div class="header">
-        <h1 class="title">${this.escapeHtml(sessionInfo.displayName)}</h1>
-        <div class="meta">
-          <span>${sortedMessages.length} 条消息</span>
-          <span>${isGroup ? '群聊' : '私聊'}</span>
-          <span>${this.escapeHtml(this.formatTimestamp(exportMeta.chatlab.exportedAt))}</span>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="referrer" content="no-referrer" />
+  <title>${this.escapeHtml(sessionInfo.displayName)} - 聊天记录</title>
+  <style>${htmlStyles}</style>
+</head>
+<body>
+  <div class="loader" id="loader"></div>
+  <div class="page" id="content" style="display:none;">
+    <div class="mid-bar">
+      <div class="timeline-area">
+        <div class="timeline-wrapper">
+          <div class="timeline" id="timeline"></div>
         </div>
-        <div class="controls">
+      </div>
+    </div>
+    <div class="main-body">
+      <div class="title-bar" id="title-bar">
+        <span class="session-title">${this.escapeHtml(sessionInfo.displayName)}</span>
+        <div class="filter-tabs">
+          <span class="filter-tab active" data-type="all">全部</span>
+          <span class="filter-tab" data-type="text">文本</span>
+          <span class="filter-tab" data-type="image">图片</span>
+          <span class="filter-tab" data-type="video">视频</span>
+          <span class="filter-tab" data-type="voice">语音</span>
+          <span class="filter-tab" data-type="file">文件</span>
+          <span class="filter-tab" data-type="link">链接</span>
+          <span class="filter-tab" data-type="location">位置</span>
+          <span class="filter-tab" data-type="refer">引用</span>
+          <span class="filter-tab" data-type="merge">聊天合集</span>
+          <span class="filter-tab" data-type="system">系统</span>
+        </div>
+        <div class="search-area">
           <input id="searchInput" type="search" placeholder="搜索消息..." />
-          <input id="timeInput" type="datetime-local" />
-          <button id="jumpBtn" type="button">跳转</button>
-          <div class="stats">
-            <span id="resultCount">共 ${sortedMessages.length} 条</span>
+          <div class="time-jump-area">
+            <input id="timeInput" type="datetime-local" title="跳转到指定时间" />
+            <button id="jumpBtn" type="button">跳转</button>
           </div>
         </div>
       </div>
-      
-      <div id="scrollContainer" class="scroll-container"></div>
-      
+      <div class="container">
+        <div class="content" id="chat-container" onscroll="checkScroll()"></div>
+      </div>
+      <div class="nav-bar">
+        <div class="turner-bar">
+          <button class="page-btn" type="button" onclick="prevPage()" id="prevPageBtn">上一页</button>
+          <div class="page-jump">第
+            <input class="navgator" value="1" id="gotoPage" onchange="gotoPage()" />
+            <span>/ <span id="maxPage">0</span> 页</span>
+          </div>
+          <button class="page-btn" type="button" onclick="nextPage()" id="nextPageBtn">下一页</button>
+          <div class="page-count">共 <span id="totalMsgCount">${sortedMessages.length}</span> 条</div>
+        </div>
+      </div>
     </div>
-    
-    <div class="image-preview" id="imagePreview">
-      <img id="imagePreviewTarget" alt="预览" />
-    </div>
+  </div>
 
-    <!-- Data Injection -->
-    <script>
-      window.WEFLOW_DATA = [
+  <!-- Forwarded chat record modal -->
+  <div id="mergeMsgModal" class="merge-msg-modal">
+    <div class="merge-msg-modal-content">
+      <div class="modal-header">
+        <h3 id="mergeMsgTitle">聊天记录</h3>
+        <span class="close" onclick="closeMergeModal()">&times;</span>
+      </div>
+      <div class="modal-container" id="mergeMsgContainer"></div>
+    </div>
+  </div>
+
+  <!-- Image preview modal -->
+  <div id="modal" class="modal" onclick="hideModal()">
+    <img id="modal-image" class="modal-image" />
+  </div>
+
+  <!-- Raw Data -->
+  <script>
+    window.WEFLOW_DATA = [
 `);
 
-      // Pre-build avatar HTML lookup to avoid per-message rebuilds
+      // Pre-build avatar HTML lookup
       const avatarHtmlCache = new Map<string, string>()
       const senderProfileCache = new Map<string, ExportDisplayProfile>()
       const getAvatarHtml = (username: string, name: string): string => {
@@ -9588,8 +9779,8 @@ class ExportService {
         if (cached !== undefined) return cached
         const avatarData = avatarMap.get(username)
         const html = avatarData
-          ? `<img src="${this.escapeAttribute(encodeURI(avatarData))}" alt="${this.escapeAttribute(name)}" />`
-          : `<span>${this.escapeHtml(this.getAvatarFallback(name))}</span>`
+          ? `<div class="avatar"><img src="${this.escapeAttribute(encodeURI(avatarData))}" alt="${this.escapeAttribute(name)}" /></div>`
+          : `<div class="avatar-placeholder">${this.escapeHtml(this.getAvatarFallback(name))}</div>`
         avatarHtmlCache.set(username, html)
         return html
       }
@@ -9611,8 +9802,8 @@ class ExportService {
         const senderName = isGroup
           ? (() => {
             const senderKey = `${isSenderMe ? cleanedMyWxid : (msg.senderUsername || cleanedMyWxid)}::${isSenderMe ? '1' : '0'}`
-            const cached = senderProfileCache.get(senderKey)
-            if (cached) return cached.displayName
+            const cachedProfile = senderProfileCache.get(senderKey)
+            if (cachedProfile) return cachedProfile.displayName
             return ''
           })()
           : (isSenderMe ? (myInfo.displayName || '我') : (sessionInfo.displayName || sessionId))
@@ -9634,8 +9825,8 @@ class ExportService {
 
         const avatarHtml = getAvatarHtml(isSenderMe ? cleanedMyWxid : msg.senderUsername, resolvedSenderName)
 
-        const timeText = this.formatTimestamp(msg.createTime)
-        const typeName = this.getMessageTypeName(msg.localType)
+        const localType = msg.localType
+        const typeName = this.getMessageTypeName(localType, msg.content)
         const quotedReplyDisplay = await this.resolveQuotedReplyDisplayWithNames({
           content: msg.content,
           isGroup,
@@ -9649,16 +9840,16 @@ class ExportService {
 
         let textContent = quotedReplyDisplay?.replyText || this.formatHtmlMessageText(
           msg.content,
-          msg.localType,
+          localType,
           cleanedMyWxid,
           msg.senderUsername,
           msg.isSend,
           msg.emojiCaption
         )
-        if (msg.localType === 34 && useVoiceTranscript) {
+        if (localType === 34 && useVoiceTranscript) {
           textContent = voiceTranscriptMap.get(this.getStableMessageKey(msg)) || '[语音消息 - 转文字失败]'
         }
-        if (mediaItem && msg.localType === 3) {
+        if (mediaItem && localType === 3) {
           textContent = ''
         }
         if (this.isTransferExportContent(textContent) && msg.content) {
@@ -9679,68 +9870,146 @@ class ExportService {
           }
         }
 
-        const linkCard = quotedReplyDisplay ? null : this.extractHtmlLinkCard(msg.content, msg.localType)
+        // Determine XML app message type
+        const normalizedContent = msg.content ? this.normalizeAppMessageContent(msg.content) : ''
+        const xmlType = this.extractAppMessageType(normalizedContent)
 
-        let mediaHtml = ''
-        if (mediaItem?.kind === 'image') {
-          const mediaPath = this.escapeAttribute(encodeURI(mediaItem.relativePath))
-          mediaHtml = `<img class="message-media image previewable" src="${mediaPath}" data-full="${mediaPath}" alt="${this.escapeAttribute(typeName)}" />`
-        } else if (mediaItem?.kind === 'emoji') {
-          const mediaPath = this.escapeAttribute(encodeURI(mediaItem.relativePath))
-          mediaHtml = `<img class="message-media emoji previewable" src="${mediaPath}" data-full="${mediaPath}" alt="${this.escapeAttribute(typeName)}" />`
-        } else if (mediaItem?.kind === 'voice') {
-          mediaHtml = `<audio class="message-media audio" controls src="${this.escapeAttribute(encodeURI(mediaItem.relativePath))}"></audio>`
-        } else if (mediaItem?.kind === 'video') {
-          const posterAttr = mediaItem.posterDataUrl ? ` poster="${this.escapeAttribute(mediaItem.posterDataUrl)}"` : ''
-          mediaHtml = `<video class="message-media video" controls preload="metadata"${posterAttr} src="${this.escapeAttribute(encodeURI(mediaItem.relativePath))}"></video>`
+        const linkCard = quotedReplyDisplay ? null : this.extractHtmlLinkCard(msg.content, localType)
+
+        // Build message content HTML
+        let messageContentHtml = ''
+
+        // System message
+        if (localType === 10000) {
+          const sysText = textContent || typeName
+          const itemObj: Record<string, any> = {
+            i: i + 1, t: msg.createTime, s: isSenderMe ? 1 : 0, c: localType, n: resolvedSenderName,
+            a: avatarHtml,
+            b: `<div class="item item-center"><span>${this.renderTextWithEmoji(sysText).replace(/\r?\n/g, '<br />')}</span></div>`
+          }
+          writeBuf.push(JSON.stringify(itemObj))
+          if (writeBuf.length >= WRITE_BATCH || i === sortedMessages.length - 1) {
+            await writePromise(writeBuf.join(',\n') + (i === sortedMessages.length - 1 ? '\n' : ',\n'))
+            writeBuf = []
+          }
+          if ((i + 1) % 500 === 0) {
+            onProgress?.({ current: 60 + Math.floor((i + 1) / sortedMessages.length * 30), total: 100, currentSession: sessionInfo.displayName, phase: 'writing', estimatedTotalMessages: totalMessages, collectedMessages: totalMessages, exportedMessages: i + 1 })
+          }
+          continue
         }
 
-        const textHtml = quotedReplyDisplay
-          ? (() => {
-            const quotedSenderHtml = quotedReplyDisplay.quotedSender
-              ? `<div class="quoted-sender">${this.escapeHtml(quotedReplyDisplay.quotedSender)}</div>`
-              : ''
-            const quotedPreviewHtml = `<div class="quoted-text">${this.renderTextWithEmoji(quotedReplyDisplay.quotedPreview).replace(/\r?\n/g, '<br />')}</div>`
-            const replyTextHtml = textContent
-              ? `<div class="message-text">${this.renderTextWithEmoji(textContent).replace(/\r?\n/g, '<br />')}</div>`
-              : ''
-            return `<div class="quoted-message">${quotedSenderHtml}${quotedPreviewHtml}</div>${replyTextHtml}`
-          })()
-          : (linkCard
-            ? `<div class="message-text"><a class="message-link-card" href="${this.escapeAttribute(linkCard.url)}" target="_blank" rel="noopener noreferrer">${this.renderTextWithEmoji(linkCard.title).replace(/\r?\n/g, '<br />')}</a></div>`
-            : (textContent
-              ? `<div class="message-text">${this.renderTextWithEmoji(textContent).replace(/\r?\n/g, '<br />')}</div>`
-              : ''))
-        const senderNameHtml = isGroup
-          ? `<div class="sender-name">${this.escapeHtml(resolvedSenderName)}</div>`
+        const dir = isSenderMe ? 'right' : 'left'
+
+        // Image
+        if (mediaItem?.kind === 'image') {
+          const mediaPath = this.escapeAttribute(encodeURI(mediaItem.relativePath))
+          messageContentHtml = `<div class="chat-image"><img src="${mediaPath}" onclick="showModal(this)" loading="lazy" alt="${this.escapeAttribute(typeName)}" /></div>`
+        }
+        // Image missing – show visual placeholder
+        else if (localType === 3 && !mediaItem) {
+          messageContentHtml = `<div class="chat-image chat-image-placeholder"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="48" height="48"><rect width="64" height="64" rx="4" fill="#e8e8e8"/><path d="M10 44l14-18 10 13 8-9 12 14H10z" fill="#bbb"/><circle cx="42" cy="20" r="5" fill="#bbb"/></svg><span>[图片]</span></div>`
+        }
+        // Emoji / sticker
+        else if (mediaItem?.kind === 'emoji') {
+          const mediaPath = this.escapeAttribute(encodeURI(mediaItem.relativePath))
+          messageContentHtml = `<div class="emoji-image"><img src="${mediaPath}" onclick="showModal(this)" loading="lazy" alt="${this.escapeAttribute(typeName)}" /></div>`
+        }
+        // Emoji missing
+        else if (localType === 47 && !mediaItem) {
+          messageContentHtml = `<div class="emoji-image emoji-image-placeholder"><span>[表情]</span></div>`
+        }
+        // Voice
+        else if (mediaItem?.kind === 'voice') {
+          messageContentHtml = `<div class="chat-audio"><audio controls src="${this.escapeAttribute(encodeURI(mediaItem.relativePath))}"></audio></div>`
+        }
+        // Voice missing
+        else if (localType === 34 && !mediaItem) {
+          const voiceLen = msg.voiceLen || msg.voiceLength || 0
+          const durStr = voiceLen > 0 ? `${Math.round(voiceLen / 1000)}s` : ''
+          messageContentHtml = `<div class="chat-audio chat-audio-placeholder"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a4 4 0 0 1 4 4v7a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4z"/><path d="M19 11a7 7 0 0 1-14 0"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span>语音${durStr ? ' ' + durStr : ''}</span></div>`
+        }
+        // Video
+        else if (mediaItem?.kind === 'video') {
+          const posterAttr = mediaItem.posterDataUrl ? ` poster="${this.escapeAttribute(mediaItem.posterDataUrl)}"` : ''
+          messageContentHtml = `<div class="chat-video"><video controls preload="metadata"${posterAttr} src="${this.escapeAttribute(encodeURI(mediaItem.relativePath))}"></video></div>`
+        }
+        // Video missing – show visual placeholder
+        else if (localType === 43 && !mediaItem) {
+          messageContentHtml = `<div class="chat-video chat-video-placeholder"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="48" height="48"><rect width="64" height="64" rx="4" fill="#1a1a1a" opacity="0.85"/><polygon points="24,18 48,32 24,46" fill="white"/></svg><span>[视频]</span></div>`
+        }
+        // File attachment
+        else if (mediaItem?.kind === 'file') {
+          const fileName = this.escapeHtml(msg.fileName || '文件')
+          const rawSize = msg.fileSize || 0
+          const fileSizeStr = rawSize > 0 ? ` · ${Math.ceil(rawSize / 1024)}KB` : ''
+          messageContentHtml = `<div class="chat-file"><div class="file-box"><div class="file-info"><div class="file-name">${fileName}</div><div class="file-size">${this.escapeHtml(fileSizeStr)}</div></div></div></div>`
+        }
+        // Forwarded chat record (xmlType 19)
+        else if (xmlType === '19') {
+          const chatHistory = this.parseChatHistory(msg.content || '')
+          const previewItems = (chatHistory || []).slice(0, 3)
+          const previewHtml = previewItems.map(r => `<div class="msg">${this.escapeHtml(r.sourcename || '')}: ${this.escapeHtml((r.datadesc || r.datatitle || '[消息]').slice(0, 30))}</div>`).join('')
+          const recordJson = this.escapeAttribute(JSON.stringify({ title: this.escapeHtml(this.extractXmlValue(normalizedContent, 'title') || '聊天记录'), items: chatHistory || [] }))
+          messageContentHtml = `<div class="merge-message" onclick="openMergeModal(this)" data-record="${recordJson}"><div class="title">${this.escapeHtml(this.extractXmlValue(normalizedContent, 'title') || '聊天记录')}</div>${previewHtml}<div class="bottom">聊天记录</div></div>`
+        }
+        // Location
+        else if (localType === 48) {
+          const locMeta = this.extractLocationMeta(msg.content || '', localType)
+          if (locMeta) {
+            const poiname = this.escapeHtml(locMeta.locationPoiname || '位置')
+            const label = this.escapeHtml(locMeta.locationLabel || '')
+            messageContentHtml = `<div class="location"><div class="poiname">${poiname}</div>${label ? `<div class="label">${label}</div>` : ''}<div class="map"></div></div>`
+          } else {
+            messageContentHtml = `<div class="bubble bubble-${dir}">[位置消息]</div>`
+          }
+        }
+        // Link card
+        else if (linkCard) {
+          messageContentHtml = `<div class="card"><div class="card-content"><h2>${this.escapeHtml(linkCard.title)}</h2></div><div class="link-info"><span class="app-name"><a href="${this.escapeAttribute(linkCard.url)}" target="_blank" rel="noopener noreferrer">${this.escapeHtml(linkCard.url.slice(0, 40))}${linkCard.url.length > 40 ? '…' : ''}</a></span></div></div>`
+        }
+        // Quoted reply
+        else if (quotedReplyDisplay) {
+          const qSender = quotedReplyDisplay.quotedSender ? `${this.escapeHtml(quotedReplyDisplay.quotedSender)}: ` : ''
+          const qText = this.renderTextWithEmoji(quotedReplyDisplay.quotedPreview).replace(/\r?\n/g, '<br />')
+          const replyText = this.renderTextWithEmoji(textContent || '').replace(/\r?\n/g, '<br />')
+          messageContentHtml = `<div class="bubble bubble-${dir}">${replyText}<div class="chat-refer chat-refer-${dir}">${qSender}${qText}</div></div>`
+        }
+        // Default text bubble
+        else {
+          const innerText = textContent || typeName
+          messageContentHtml = `<div class="bubble bubble-${dir}">${this.renderTextWithEmoji(innerText).replace(/\r?\n/g, '<br />')}</div>`
+        }
+
+        // Display name (group chat, received only)
+        const displaynameHtml = (isGroup && !isSenderMe)
+          ? `<div class="displayname">${this.escapeHtml(resolvedSenderName)}</div>`
           : ''
-        const timeHtml = `<div class="message-time">${this.escapeHtml(timeText)}</div>`
-        const messageBody = `${timeHtml}${senderNameHtml}<div class="message-content">${mediaHtml}${textHtml}</div>`
+
+        const wrapperHtml = `<div class="content-wrapper content-wrapper-${dir}">${displaynameHtml}${messageContentHtml}</div>`
+        const itemHtml = `<div class="item item-${dir}" data-ts="${msg.createTime}">${avatarHtml}${wrapperHtml}</div>`
+
         const platformMessageId = this.getExportPlatformMessageId(msg)
         const replyToMessageId = this.getExportReplyToMessageId(msg.content)
 
-        // Compact JSON object
         const itemObj: Record<string, any> = {
-          i: i + 1, // index
-          t: msg.createTime, // timestamp
-          s: isSenderMe ? 1 : 0, // isSend
-          a: avatarHtml, // avatar HTML
-          b: messageBody // body HTML
+          i: i + 1,
+          t: msg.createTime,
+          s: isSenderMe ? 1 : 0,
+          c: localType,
+          n: resolvedSenderName,
+          b: itemHtml
         }
         if (platformMessageId) itemObj.p = platformMessageId
         if (replyToMessageId) itemObj.r = replyToMessageId
 
         writeBuf.push(JSON.stringify(itemObj))
 
-        // Flush buffer periodically
         if (writeBuf.length >= WRITE_BATCH || i === sortedMessages.length - 1) {
           const isLast = i === sortedMessages.length - 1
-          const chunk = writeBuf.join(',\n') + (isLast ? '\n' : ',\n')
-          await writePromise(chunk)
+          await writePromise(writeBuf.join(',\n') + (isLast ? '\n' : ',\n'))
           writeBuf = []
         }
 
-        // Report progress occasionally
         if ((i + 1) % 500 === 0) {
           onProgress?.({
             current: 60 + Math.floor((i + 1) / sortedMessages.length * 30),
@@ -9755,113 +10024,353 @@ class ExportService {
       }
 
       await writePromise(`];
-    </script>
+  </script>
 
-    <script>
-       ${this.getVirtualScrollScript()}
+  <script>
+    (function() {
+      var allData = window.WEFLOW_DATA || [];
+      var chatMessages = allData;
 
-      const searchInput = document.getElementById('searchInput')
-      const timeInput = document.getElementById('timeInput')
-      const jumpBtn = document.getElementById('jumpBtn')
-      const resultCount = document.getElementById('resultCount')
-      const imagePreview = document.getElementById('imagePreview')
-      const imagePreviewTarget = document.getElementById('imagePreviewTarget')
-      const container = document.getElementById('scrollContainer')
-      let imageZoom = 1
+      /* ── Pagination ──────────────────────────────────── */
+      var PAGE_SIZE = 200;
+      var currentPage = 1;
+      var totalPages  = 1;
+      var container   = document.getElementById('chat-container');
 
-      // Initial Data
-      let allData = window.WEFLOW_DATA || [];
-      let currentList = allData;
+      function pad2(n) { return String(n).padStart(2,'0'); }
 
-      // Render Item Function
-      const renderItem = (item, index) => {
-         const isSenderMe = item.s === 1;
-         const platformIdAttr = item.p ? \` data-platform-message-id="\${item.p}"\` : '';
-         const replyToAttr = item.r ? \` data-reply-to-message-id="\${item.r}"\` : '';
-         return \`
-          <div class="message \${isSenderMe ? 'sent' : 'received'}" data-index="\${item.i}"\${platformIdAttr}\${replyToAttr}>
-            <div class="message-row">
-              <div class="avatar">\${item.a}</div>
-              <div class="bubble">
-                \${item.b}
-              </div>
-            </div>
-          </div>
-         \`;
-      };
-      
-      const renderer = new ChunkedRenderer(container, currentList, renderItem);
-
-      const updateCount = () => {
-        resultCount.textContent = \`共 \${currentList.length} 条\`
+      function renderPage(page) {
+        if (!container) return;
+        currentPage = Math.max(1, Math.min(page, totalPages));
+        var start = (currentPage - 1) * PAGE_SIZE;
+        var end   = Math.min(start + PAGE_SIZE, chatMessages.length);
+        var html  = '';
+        var lastDate = '';
+        for (var idx = start; idx < end; idx++) {
+          var item = chatMessages[idx];
+          var d = new Date(item.t * 1000);
+          var dateStr = d.getFullYear() + '/' + pad2(d.getMonth()+1) + '/' + pad2(d.getDate());
+          var timeStr = pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
+          if (dateStr !== lastDate) {
+            lastDate = dateStr;
+            html += '<div class="item item-center"><span>' + dateStr + ' ' + timeStr + '</span></div>';
+          }
+          html += item.b;
+        }
+        container.innerHTML = html;
+        container.scrollTop = 0;
+        updatePaginationInfo();
+        refreshMediaListener();
+        updateTimelineHighlight();
       }
 
-      // Search Logic
-      let searchTimeout;
-      searchInput.addEventListener('input', () => {
-        clearTimeout(searchTimeout);
-        searchTimeout = setTimeout(() => {
-          const keyword = searchInput.value.trim().toLowerCase();
-          if (!keyword) {
-            currentList = allData;
-          } else {
-            currentList = allData.filter(item => {
-               return item.b.toLowerCase().includes(keyword); 
-            });
-          }
-          renderer.setData(currentList);
-          updateCount();
-        }, 300);
-      })
+      function updatePaginationInfo() {
+        totalPages = Math.max(1, Math.ceil(chatMessages.length / PAGE_SIZE));
+        var el = document.getElementById('maxPage');
+        if (el) el.textContent = totalPages;
+        var gi = document.getElementById('gotoPage');
+        if (gi) gi.value = String(currentPage);
+        var tc = document.getElementById('totalMsgCount');
+        if (tc) tc.textContent = String(chatMessages.length);
+        var prev = document.getElementById('prevPageBtn');
+        var next = document.getElementById('nextPageBtn');
+        if (prev) prev.disabled = currentPage <= 1;
+        if (next) next.disabled = currentPage >= totalPages;
+      }
 
-      // Jump Logic
-      jumpBtn.addEventListener('click', () => {
-        const value = timeInput.value
-        if (!value) return
-        const target = Math.floor(new Date(value).getTime() / 1000)
-        renderer.scrollToTime(target);
-      })
-
-      // Image Preview (Delegation)
-      container.addEventListener('click', (e) => {
-        const target = e.target;
-        if (target.classList.contains('previewable')) {
-           const full = target.getAttribute('data-full')
-           if (!full) return
-           imagePreviewTarget.src = full
-           imageZoom = 1
-           imagePreviewTarget.style.transform = 'scale(1)'
-           imagePreview.classList.add('active')
+      function prevPage() { if (currentPage > 1) renderPage(currentPage - 1); }
+      function nextPage() { if (currentPage < totalPages) renderPage(currentPage + 1); }
+      function gotoPage() {
+        var gi = document.getElementById('gotoPage');
+        var v = parseInt(gi ? gi.value : '1', 10);
+        if (!isNaN(v)) renderPage(v);
+      }
+      function checkScroll() {
+        if (!container) return;
+        updateTimelineHighlight();
+        if (container.scrollTop + container.clientHeight >= container.scrollHeight - 50) {
+          if (currentPage < totalPages) renderPage(currentPage + 1);
         }
+      }
+
+      /* ── Timeline ────────────────────────────────────── */
+      // Build index: {year: {month: firstDataIdx}}
+      // Also count messages per year-month for display
+      var timelineMap = {};      // {year: {month: firstIdx}}
+      var timelineCount = {};    // {year_month: count}
+      for (var ti2 = 0; ti2 < allData.length; ti2++) {
+        var td = new Date(allData[ti2].t * 1000);
+        var ty = td.getFullYear(), tm = td.getMonth() + 1;
+        if (!timelineMap[ty]) timelineMap[ty] = {};
+        if (timelineMap[ty][tm] === undefined) timelineMap[ty][tm] = ti2;
+        var tmKey = ty + '_' + tm;
+        timelineCount[tmKey] = (timelineCount[tmKey] || 0) + 1;
+      }
+
+      // Fill in all months between first and last message
+      var allYears = Object.keys(timelineMap).map(Number).sort(function(a,b){return a-b;});
+      var fullTimelineMap = {};  // same structure but includes empty months
+      if (allYears.length > 0) {
+        var firstYear = allYears[0];
+        var lastYear  = allYears[allYears.length - 1];
+        var firstMonth = Number(Object.keys(timelineMap[firstYear]).sort(function(a,b){return a-b;})[0]);
+        var lastMonths = Object.keys(timelineMap[lastYear]).map(Number).sort(function(a,b){return a-b;});
+        var lastMonth  = lastMonths[lastMonths.length - 1];
+        var cy = firstYear, cm = firstMonth;
+        while (cy < lastYear || (cy === lastYear && cm <= lastMonth)) {
+          if (!fullTimelineMap[cy]) fullTimelineMap[cy] = {};
+          fullTimelineMap[cy][cm] = (timelineMap[cy] && timelineMap[cy][cm] !== undefined)
+            ? timelineMap[cy][cm]
+            : -1; // -1 = no messages that month
+          cm++;
+          if (cm > 12) { cm = 1; cy++; }
+        }
+      }
+
+      function buildTimeline() {
+        var timeline = document.getElementById('timeline');
+        if (!timeline || allData.length === 0) return;
+        var html = '';
+        var sortedYears = Object.keys(fullTimelineMap).map(Number).sort(function(a,b){return a-b;});
+        for (var yi = 0; yi < sortedYears.length; yi++) {
+          var year = sortedYears[yi];
+          var firstMonthIdx = -1;
+          var mKeys = Object.keys(fullTimelineMap[year]).map(Number).sort(function(a,b){return a-b;});
+          for (var mi2 = 0; mi2 < mKeys.length; mi2++) {
+            if (fullTimelineMap[year][mKeys[mi2]] >= 0) { firstMonthIdx = fullTimelineMap[year][mKeys[mi2]]; break; }
+          }
+          var yearOnclick = firstMonthIdx >= 0 ? ' onclick="jumpToIdx(' + firstMonthIdx + ')"' : '';
+          html += '<div class="timeline-item-year"' + yearOnclick + '>'
+               + '<div class="timeline-dot-year"></div>'
+               + '<div class="timeline-right">' + year + '年</div></div>';
+          for (var mi = 0; mi < mKeys.length; mi++) {
+            var month = mKeys[mi];
+            var firstIdx = fullTimelineMap[year][month];
+            var hasData = firstIdx >= 0;
+            var cnt = timelineCount[year + '_' + month] || 0;
+            var mOnclick = hasData ? ' onclick="jumpToIdx(' + firstIdx + ')"' : '';
+            var noMsgCls = hasData ? '' : ' no-msg-month';
+            html += '<div class="timeline-item-month' + noMsgCls + '" data-year="' + year + '" data-month="' + month + '"' + mOnclick + '>'
+                 + '<div class="timeline-dot-month"></div>'
+                 + '<div class="timeline-right">' + month + '月' + (cnt > 0 ? '<span class="tl-count">' + cnt + '</span>' : '') + '</div></div>';
+          }
+        }
+        timeline.innerHTML = html;
+      }
+
+      function updateTimelineHighlight() {
+        if (!container) return;
+        // Find the topmost visible item's timestamp
+        var items = container.querySelectorAll('[data-ts]');
+        var topTs = 0;
+        var containerTop = container.getBoundingClientRect().top;
+        for (var i = 0; i < items.length; i++) {
+          var rect = items[i].getBoundingClientRect();
+          if (rect.bottom > containerTop) {
+            topTs = parseInt(items[i].getAttribute('data-ts') || '0', 10);
+            break;
+          }
+        }
+        // Fallback: use first item on current page
+        if (!topTs && chatMessages.length > 0) {
+          var startIdx = (currentPage - 1) * PAGE_SIZE;
+          if (startIdx < chatMessages.length) topTs = chatMessages[startIdx].t;
+        }
+        if (!topTs) return;
+        var d = new Date(topTs * 1000);
+        var curYear = d.getFullYear(), curMonth = d.getMonth() + 1;
+        var monthEls = document.querySelectorAll('.timeline-item-month');
+        for (var mi = 0; mi < monthEls.length; mi++) {
+          var el = monthEls[mi];
+          var elY = parseInt(el.getAttribute('data-year') || '0', 10);
+          var elM = parseInt(el.getAttribute('data-month') || '0', 10);
+          if (elY === curYear && elM === curMonth) {
+            el.classList.add('current');
+            // Scroll timeline to show it
+            el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+          } else {
+            el.classList.remove('current');
+          }
+        }
+      }
+
+      function jumpToIdx(idx) {
+        var page = Math.floor(idx / PAGE_SIZE) + 1;
+        renderPage(page);
+      }
+
+      /* ── Filter helpers ──────────────────────────────── */
+      function messageMatchesType(m, type) {
+        var body = m && m.b ? m.b : '';
+        if (type === 'all') return true;
+        if (type === 'text') return m.c === 1;
+        if (type === 'image') return m.c === 3;
+        if (type === 'video') return m.c === 43;
+        if (type === 'voice') return m.c === 34;
+        if (type === 'file') return body.indexOf('chat-file') !== -1;
+        if (type === 'link') return body.indexOf('class="card"') !== -1 || body.indexOf("class='card'") !== -1;
+        if (type === 'location') return m.c === 48 || body.indexOf('class="location"') !== -1 || body.indexOf("class='location'") !== -1;
+        if (type === 'refer') return body.indexOf('chat-refer') !== -1 || body.indexOf('item-refer') !== -1;
+        if (type === 'merge') return body.indexOf('merge-message') !== -1;
+        if (type === 'system') return m.c === 10000 || body.indexOf('item-center') !== -1;
+        return true;
+      }
+
+      /* ── Filter tab counts ───────────────────────────── */
+      function updateTabCounts() {
+        var counts = { all: allData.length };
+        var tabs2 = document.querySelectorAll('.filter-tab');
+        for (var ti = 0; ti < tabs2.length; ti++) {
+          var type = tabs2[ti].getAttribute('data-type');
+          if (type && counts[type] === undefined) counts[type] = 0;
+        }
+        for (var i = 0; i < allData.length; i++) {
+          var m = allData[i];
+          for (var ti2 = 0; ti2 < tabs2.length; ti2++) {
+            var t = tabs2[ti2].getAttribute('data-type');
+            if (t && t !== 'all' && messageMatchesType(m, t)) counts[t] = (counts[t] || 0) + 1;
+          }
+        }
+        for (var ti3 = 0; ti3 < tabs2.length; ti3++) {
+          var tab = tabs2[ti3];
+          var type2 = tab.getAttribute('data-type');
+          var cnt = counts[type2] || 0;
+          var label = tab.getAttribute('data-label') || tab.textContent.replace(/\s*\d+\s*$/, '').trim();
+          if (!tab.getAttribute('data-label')) tab.setAttribute('data-label', label);
+          tab.innerHTML = '<span class="tab-label">' + label + '</span>' + (cnt > 0 ? '<span class="tab-count">' + cnt + '</span>' : '');
+        }
+      }
+
+      /* ── Filters ─────────────────────────────────────── */
+      var activeFilter = 'all';
+      function applyFilter(type) {
+        activeFilter = type || 'all';
+        chatMessages = allData.filter(function(m){ return messageMatchesType(m, activeFilter); });
+        currentPage = 1;
+        renderPage(1);
+      }
+      /* ── Search ──────────────────────────────────────── */
+      var searchTimer;
+      function doSearch() {
+        var kw = (document.getElementById('searchInput').value || '').trim().toLowerCase();
+        var base = allData.filter(function(m){ return messageMatchesType(m, activeFilter); });
+        chatMessages = kw ? base.filter(function(m){ return m.b && m.b.toLowerCase().indexOf(kw) !== -1; }) : base;
+        currentPage = 1;
+        renderPage(1);
+      }
+
+      /* ── Jump to time ────────────────────────────────── */
+      function jumpToTime() {
+        var val = document.getElementById('timeInput').value;
+        if (!val) return;
+        var target = Math.floor(new Date(val).getTime() / 1000);
+        for (var i = 0; i < allData.length; i++) {
+          if (allData[i].t >= target) {
+            jumpToIdx(i);
+            return;
+          }
+        }
+      }
+
+      /* ── Image modal ─────────────────────────────────── */
+      function showModal(img) {
+        var modal = document.getElementById('modal');
+        var mImg  = document.getElementById('modal-image');
+        if (!modal || !mImg) return;
+        mImg.src = img.src;
+        modal.classList.add('open');
+      }
+      function hideModal() {
+        var modal = document.getElementById('modal');
+        if (modal) modal.classList.remove('open');
+        var mImg = document.getElementById('modal-image');
+        if (mImg) mImg.src = '';
+      }
+
+      /* ── Forwarded chat record modal ─────────────────── */
+      function openMergeModal(el) {
+        var raw = el ? el.getAttribute('data-record') : null;
+        if (!raw) return;
+        var data;
+        try { data = JSON.parse(raw); } catch(e) { return; }
+        var title = data.title || '聊天记录';
+        var items = data.items || [];
+        document.getElementById('mergeMsgTitle').textContent = title;
+        var html = '';
+        for (var i = 0; i < items.length; i++) {
+          var item = items[i];
+          var sender = item.sourcename || '';
+          var time   = item.sourcetime || '';
+          var text   = item.datadesc || item.datatitle || '[消息]';
+          var firstChar = sender ? sender[0] : '?';
+          html += '<div class="OnePersonmsg">'
+               + '<div class="left"><div class="avatar-placeholder">' + firstChar + '</div></div>'
+               + '<div class="right"><div class="msg-block">'
+               + '<div class="msg-container-top"><span>' + sender + '</span><span>' + time + '</span></div>'
+               + '<div class="msg-container">' + text + '</div>'
+               + '</div></div></div>';
+        }
+        document.getElementById('mergeMsgContainer').innerHTML = html || '<div style="padding:20px;color:#888;text-align:center">暂无内容</div>';
+        document.getElementById('mergeMsgModal').classList.add('open');
+      }
+      function closeMergeModal() {
+        document.getElementById('mergeMsgModal').classList.remove('open');
+      }
+
+      /* ── Media listener refresh ──────────────────────── */
+      function refreshMediaListener() {
+        if (!container) return;
+        var imgs = container.querySelectorAll('.chat-image img, .emoji-image img');
+        for (var i = 0; i < imgs.length; i++) {
+          (function(img) {
+            img.onclick = function() { showModal(img); };
+          })(imgs[i]);
+        }
+      }
+
+      /* ── Wire up event handlers ──────────────────────── */
+      window.showModal       = showModal;
+      window.hideModal       = hideModal;
+      window.openMergeModal  = openMergeModal;
+      window.closeMergeModal = closeMergeModal;
+      window.prevPage        = prevPage;
+      window.nextPage        = nextPage;
+      window.gotoPage        = gotoPage;
+      window.checkScroll     = checkScroll;
+      window.jumpToIdx       = jumpToIdx;
+
+      document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') { hideModal(); closeMergeModal(); }
       });
 
-      imagePreviewTarget.addEventListener('click', (event) => {
-        event.stopPropagation()
-      })
+      var tabs = document.querySelectorAll('.filter-tab');
+      for (var ti = 0; ti < tabs.length; ti++) {
+        (function(tab) {
+          tab.addEventListener('click', function() {
+            for (var j = 0; j < tabs.length; j++) tabs[j].classList.remove('active');
+            tab.classList.add('active');
+            applyFilter(tab.getAttribute('data-type'));
+          });
+        })(tabs[ti]);
+      }
 
-      imagePreviewTarget.addEventListener('dblclick', (event) => {
-        event.stopPropagation()
-        imageZoom = 1
-        imagePreviewTarget.style.transform = 'scale(1)'
-      })
+      var si = document.getElementById('searchInput');
+      if (si) si.addEventListener('input', function(){ clearTimeout(searchTimer); searchTimer = setTimeout(doSearch, 300); });
 
-      imagePreviewTarget.addEventListener('wheel', (event) => {
-        event.preventDefault()
-        const delta = event.deltaY > 0 ? -0.1 : 0.1
-        imageZoom = Math.min(3, Math.max(0.5, imageZoom + delta))
-        imagePreviewTarget.style.transform = \`scale(\${imageZoom})\`
-      }, { passive: false })
+      var jb = document.getElementById('jumpBtn');
+      if (jb) jb.addEventListener('click', jumpToTime);
 
-      imagePreview.addEventListener('click', () => {
-        imagePreview.classList.remove('active')
-        imagePreviewTarget.src = ''
-        imageZoom = 1
-        imagePreviewTarget.style.transform = 'scale(1)'
-      })
-
-      updateCount()
-    </script>
-  </body>
+      /* ── Boot ────────────────────────────────────────── */
+      buildTimeline();
+      updateTabCounts();
+      renderPage(1);
+      var loader  = document.getElementById('loader');
+      var content = document.getElementById('content');
+      if (loader)  loader.style.display  = 'none';
+      if (content) content.style.display = 'flex';
+    })();
+  </script>
+</body>
 </html>`);
 
       return new Promise((resolve, reject) => {
@@ -10642,3 +11151,4 @@ class ExportService {
 }
 
 export const exportService = new ExportService()
+
