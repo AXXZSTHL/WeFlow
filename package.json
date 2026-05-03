@@ -1,6 +1,6 @@
 {
   "name": "weflow",
-  "version": "4.3.0",
+  "version": "4.5.0",
   "description": "WeFlow",
   "main": "dist-electron/main.js",
   "author": {
@@ -9,7 +9,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/hicccc77/WeFlow"
+    "url": "https://github.com/AXXZSTHL/WeFlow"
   },
   "//": "二改不应改变此处的作者与应用信息",
   "scripts": {
@@ -77,7 +77,7 @@
     "appId": "com.WeFlow.app",
     "publish": {
       "provider": "github",
-      "owner": "hicccc77",
+      "owner": "AXXZSTHL",
       "repo": "WeFlow",
       "releaseType": "release"
     },
