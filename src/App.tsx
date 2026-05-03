@@ -15,6 +15,9 @@ import DualReportPage from './pages/DualReportPage'
 import DualReportWindow from './pages/DualReportWindow'
 import AgreementPage from './pages/AgreementPage'
 import GroupAnalyticsPage from './pages/GroupAnalyticsPage'
+import ChatInsightPage from './pages/ChatInsightPage'
+import ChatPersonaPage from './pages/ChatPersonaPage'
+import ChatTopicsPage from './pages/ChatTopicsPage'
 import SettingsPage from './pages/SettingsPage'
 import ExportPage from './pages/ExportPage'
 import MyFootprintPage from './pages/MyFootprintPage'
@@ -695,6 +698,9 @@ function App() {
               <Route path="/analytics/group" element={<GroupAnalyticsPage />} />
               <Route path="/analytics/view" element={<RouteStateRedirect to="/analytics/private/view" />} />
               <Route path="/group-analytics" element={<RouteStateRedirect to="/analytics/group" />} />
+              <Route path="/insight" element={<ChatInsightPage />} />
+              <Route path="/persona" element={<ChatPersonaPage />} />
+              <Route path="/topics" element={<ChatTopicsPage />} />
               <Route path="/annual-report" element={<AnnualReportPage />} />
               <Route path="/annual-report/view" element={<AnnualReportWindow />} />
               <Route path="/dual-report" element={<DualReportPage />} />

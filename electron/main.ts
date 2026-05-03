@@ -31,6 +31,7 @@ import { destroyNotificationWindow, registerNotificationHandlers, showNotificati
 import { httpService } from './services/httpService'
 import { messagePushService } from './services/messagePushService'
 import { insightService } from './services/insightService'
+import { aiService } from './services/aiService'
 import { normalizeWeiboCookieInput, weiboService } from './services/social/weiboService'
 import { bizService } from './services/bizService'
 import { backupService } from './services/backupService'
@@ -1753,6 +1754,16 @@ function registerIpcHandlers() {
   }) => {
     return insightService.generateFootprintInsight(payload)
   })
+
+  // AI 对话分析 & 回复生成
+  ipcMain.handle('ai:analyzeChat', async (_, payload: {
+    sessionId: string; prompt: string; analysisType: 'insight' | 'persona' | 'topics'; isGroup?: boolean
+  }) => { return aiService.analyzeChat(payload) })
+
+  ipcMain.handle('ai:generateReply', async (_, payload: {
+    sessionId: string; prompt: string; role: string
+    contextMessages: Array<{ isSend: boolean; content: string; createTime: number }>
+  }) => { return aiService.generateReply(payload) })
 
   ipcMain.handle('social:saveWeiboCookie', async (_, rawInput: string) => {
     try {

@@ -1253,6 +1253,15 @@ export interface ElectronAPI {
       mentionGroups?: Array<{ displayName?: string; session_id?: string; count?: number }>
     }) => Promise<{ success: boolean; message: string; insight?: string }>
   }
+  ai: {
+    analyzeChat: (payload: {
+      sessionId: string; prompt: string; analysisType: 'insight' | 'persona' | 'topics'; isGroup?: boolean
+    }) => Promise<{ success: boolean; data?: { content: string }; error?: string }>
+    generateReply: (payload: {
+      sessionId: string; prompt: string; role: string
+      contextMessages: Array<{ isSend: boolean; content: string; createTime: number }>
+    }) => Promise<{ success: boolean; data?: { content: string }; error?: string }>
+  }
 }
 
 export interface ExportOptions {

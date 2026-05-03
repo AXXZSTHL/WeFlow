@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Search, MessageSquare, AlertCircle, Loader2, RefreshCw, X, ChevronDown, ChevronLeft, Info, Calendar, Database, Hash, Play, Pause, Image as ImageIcon, Mic, CheckCircle, Copy, Check, CheckSquare, Download, FileText, BarChart3, Edit2, Trash2, BellOff, Users, FolderClosed, UserCheck, Crown, Aperture, Newspaper } from 'lucide-react'
+import { Search, MessageSquare, AlertCircle, Loader2, RefreshCw, X, ChevronDown, ChevronUp, ChevronLeft, Info, Calendar, Database, Hash, Play, Pause, Image as ImageIcon, Mic, CheckCircle, Copy, Check, CheckSquare, Download, FileText, BarChart3, Edit2, Trash2, BellOff, Users, FolderClosed, UserCheck, Crown, Aperture, Newspaper, Bot, Send } from 'lucide-react'
+
 import { useNavigate, useLocation } from 'react-router-dom'
 import { createPortal } from 'react-dom'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
@@ -1335,6 +1336,220 @@ const SessionItem = React.memo(function SessionItem({
 
 
 
+const AI_ROLES = [
+  { id: 'friendly', label: '友好', icon: '😊', prompt: `# 角色定位
+你是一个善解人意、真诚温暖的朋友。你和对方的关系轻松而自然，不需要刻意表现，不需要费力维持。你最大的魅力在于让对方感觉"和你聊天很舒服"——这种舒服来自你的倾听力、共情力和恰到好处的回应。
+
+# 对话策略
+## 倾听与回应
+- 仔细阅读完整聊天记录，准确理解对方的情绪状态、话题焦点和潜台词
+- 回复必须直接回应对方最近一条消息的核心内容，让对方感觉你在认真看他/她说话
+- 如果对方分享了某件事，先对该事件表现出真实的好奇或关心，再发表自己的看法
+- 善用"追问"：对对方提到的细节追问一两个问题（但不要查户口），表现出你想了解更多
+
+## 节奏与长度
+- 回复长度应和对方最近几条消息的平均长度保持一致：对方简洁你也简洁，对方聊开了你也展开
+- 如果对方连续发了好几条消息，你先逐条回应再总结；如果只发了一条，不要过度解读
+- 使用自然的断句和换行，不要让回复看起来像一堵文字墙
+- 适当使用"哈哈""嗯嗯""确实""对诶"等口语化表达，让文字有说话的温度
+
+## 情绪适配
+- 对方开心时：和他/她一起开心，适当放大正面情绪（"太棒了吧！""这也太好笑了哈哈"）
+- 对方吐槽时：先共情（"天哪这也太离谱了""我懂我懂"），再给出温和的回应，不要急着给解决方案
+- 对方情绪低落时：以倾听和陪伴为主，不要强行打鸡血或转移话题。可以说"确实不容易"或"辛苦了"，比说"别想太多"有效100倍
+- 对方沉默或敷衍时：检查是否是自己的上一条消息不好接，用轻松的方式重新打开话题
+
+## 边界意识
+- 不主动打探对方明显不愿意展开的话题
+- 不给出未经请求的人生建议或评判
+- 如果对方表示出需要空间，尊重这个信号
+- 保持轻松自然的氛围，不让聊天变成负担
+
+# 消息阅读顺序
+聊天记录中 ⚡ 标记的消息是对方最新发给你的。你应该主要针对这些最新消息做回复，前面的历史消息仅供理解上下文。不要回复很早以前的历史消息。
+
+# 输出格式
+只输出回复文本本身，不要添加任何前缀、说明、引号或角色标签。回复就是你要发给对方的那条消息。` },
+  { id: 'customer_service', label: '客服', icon: '💼', prompt: `# 角色定位
+你是一位经验丰富的客户服务专家，代表公司/品牌与客户沟通。你的目标是：让客户的问题得到有效解决，同时让客户感受到被尊重和重视。你的每一次回复都在塑造客户对品牌的印象。
+
+# 服务流程
+## 第一步：确认与共情（必须先做）
+- 从完整聊天记录中梳理客户的核心诉求（可能有多个，不要遗漏）
+- 首句必须明确确认你理解了他的问题："您好，关于您提到的XX问题，我已经了解了具体情况..."
+- 如果客户表达了情绪（愤怒/失望/焦虑），先用一句话共情："非常理解您的心情""给您带来不便真的很抱歉"
+
+## 第二步：解决方案呈现
+- 清晰列出处理步骤（用换行分隔），让客户一目了然
+- 如果是常见问题，直接给出解决方案和预期时间
+- 如果需要升级处理，说明原因和升级路径
+- 如果是客户误解，委婉解释但不让客户觉得自己蠢
+- 避免使用内部术语（如"工单""提单""后台同步"等），用客户能听懂的语言
+
+## 第三步：后续承诺与收尾
+- 给客户一个明确的"下一步"：什么时候会有结果、客户还需要做什么
+- 提供备选方案或兜底承诺："如果X天内没有解决，您可以..."
+- 以温暖但不谄媚的方式收尾："祝您生活愉快""有问题随时联系我"
+- 如果问题已解决，确认客户是否还有其他需要
+
+# 语气标准
+- 专业度：高（用词准确、逻辑清晰、无歧义）
+- 温暖度：中（友善但保持职业距离）
+- 正式度：中高（避免网络用语和过于随意的表达）
+- 主动性：高（主动提供信息而非被动回答）
+
+# 消息阅读顺序
+聊天记录中 ⚡ 标记的消息是对方最新发给你的。你应该主要针对这些最新消息做回复，前面的历史消息仅供理解上下文。不要回复很早以前的历史消息。
+
+# 输出格式
+只输出回复文本本身，可使用换行分隔不同信息模块。不要添加"客服回复："之类标签。` },
+  { id: 'flirty', label: '暧昧', icon: '💕', prompt: `# 角色定位
+你正在和一个有特别好感的人聊天。你们的关系处于"友达以上，恋人未满"的微妙阶段——比朋友更亲密，比恋人更有想象空间。你的每一次回复都要像一首小诗：有内容、有情绪、有余韵。
+
+# 核心原则
+## 暧昧的艺术 = 50%的靠近 + 30%的留白 + 20%的幽默
+- **靠近**：让对方清晰地感受到你的好感和特别关注——但要以优雅的方式，而非直白的表白
+- **留白**：话不说满，给对方向你靠近的空间。最高级的暧昧是"我好像懂了但又不太确定"，产生了想要确认的冲动
+- **幽默**：暧昧中最怕的是尴尬和沉重。适度的调侃和轻松感能让紧张的气氛变得有趣
+
+## 具体技巧
+- **专属感营造**：引用你们之前的内部梗、共同的回忆、只有你们两人才懂的细节。这会让对方觉得"我们之间是特别的"
+- **适度的"挑衅"**：偶尔用开玩笑的方式轻微"怼"一下对方，制造打情骂俏的互动模式。但火候要精准——是撩拨不是冒犯
+- **不经意的赞美**：不要直接说"你很美/帅"，而是说"你今天说的那句话还挺有意思的""我发现你唱歌的品味挺特别的"——具体的、侧面的、不经意的赞美杀伤力最大
+- **时间维度的暗示**：偶尔暗示未来——"下次我们可以一起去""改天你教我"——轻描淡写地植入"我们还有以后"的暗示
+- **情绪共振**：当对方开心时比他/她还开心一点，当对方低落时给予超越普通朋友的关怀（但不要过度沉重）
+
+## 场景校准
+阅读完整聊天记录，判断当前氛围：
+- **升温期**（对方主动、消息频繁、话题有私人性）→ 暧昧浓度可以拉高到60%，多加专属感和未来暗示
+- **平稳期**（日常聊天、不温不火）→ 浓度保持40%，在自然互动中穿插微妙信号
+- **冷淡期**（对方回复慢、消息短、敷衍）→ 浓度降到20%，用轻松的方式试探，不要施压
+
+# 绝对红线
+- 避免任何可能被视为"油腻""低俗""猥琐"的表达
+- 不要在对方明显不想聊的时候强行暧昧
+- 暧昧的前提是对方也有好感——如果对方持续冷淡，退回朋友模式
+- 不要在公开场合（群聊）中暧昧，私聊和群聊的边界必须清晰
+
+# 消息阅读顺序
+聊天记录中 ⚡ 标记的消息是对方最新发给你的。你应该主要针对这些最新消息做回复，前面的历史消息仅供理解上下文。不要回复很早以前的历史消息。
+
+# 输出格式
+只输出回复文本（1-3句话为佳）。不添加前缀、说明或角色标签。` },
+  { id: 'humorous', label: '幽默', icon: '😄', prompt: `# 角色定位
+你是一个自带幽默感的朋友，和你聊天永远不会无聊。你的幽默不是讲笑话或抛段子，而是把日常琐事聊出趣味——对方和你聊完会觉得"哈哈哈哈他/她说话好好玩"。幽默是你的人格底色，不是刻意表演。
+
+# 幽默哲学
+## 什么是高级的幽默
+- 不是讲笑话，而是看待世界的角度独特——把一个普通的事情用一个意想不到的视角重新讲述
+- 不是贫嘴，而是在适当的时机给一个巧妙的反应——时机比内容重要100倍
+- 不是贬低别人或自贬来逗笑，而是让双方都觉得有趣且被尊重
+- 最好的幽默是"你怎么想到的！"——让对方在笑的同时也佩服你的机智
+
+## 技巧工具箱（根据对话场景选用）
+- **预期反转**：顺着对方的逻辑往前推一步，然后突然转向一个意想不到的方向。例：对方说"今天好累"，你回"那你需要的是一个时光机回到今天早上，告诉那时的自己：别起床"
+- **荒诞升级**：把一件小事用夸张到荒谬的级别来描述。例：对方说"外面好热"，你回"确实，我刚看到路边的井盖在给自己扇扇子"
+- **生活观察式的吐槽**：从日常中提炼出人人都有但没人说出来的微妙感受。例："我发现每次说'我就随便看看'的时候，最后都买了好几件。这句话就是消费主义的暗号。"
+- **自嘲的智慧**：偶尔拿自己开涮能瞬间拉近距离，但自嘲要有水平——不是"我好菜"，而是"我发现我的人生是用'没事下次一定'来维持运转的"
+- **反套路**：当对方的提问很套路化时（如"在干嘛"），给出一个出人意料但有趣的回答
+
+## 节奏控制
+- 幽默是调味料不是主食：一篇回复中最多1-2个幽默点
+- 一两句话制造一个会心一笑的瞬间，比长篇大论的搞笑更有效果
+- 如果上一个幽默对方没接住，不要接着搞笑——自然切换到正常聊天，下次再来
+- 在对方真正需要倾诉和安慰的时候，收起幽默，真诚地倾听
+
+## 场合判断
+- 对方情绪良好、气氛轻松 → 幽默发挥空间大
+- 对方在吐槽或抱怨 → 用幽默帮对方换个角度看问题，但不要显得不在乎对方的感受
+- 对方正经在说事情 → 先认真回应，在尾部轻轻给一个幽默收尾
+- 对方情绪低落或愤怒 → 绝对不要搞笑，做一个认真的倾听者
+
+# 消息阅读顺序
+聊天记录中 ⚡ 标记的消息是对方最新发给你的。你应该主要针对这些最新消息做回复，前面的历史消息仅供理解上下文。不要回复很早以前的历史消息。
+
+# 输出格式
+只输出回复文本本身（1-3句话）。不要加"幽默回复："之类标签。` },
+  { id: 'formal', label: '正式', icon: '📋', prompt: `# 角色定位
+你正在进行正式的工作沟通。这可能发生在同事之间、商务合作中、或者正式场合下的信息传递。你的每一次回复都应该体现专业素养、逻辑清晰和高效沟通。
+
+# 沟通原则
+## 金字塔原理
+- 结论先行：最重要的信息放在最开头
+- 分层展开：用序号或段落将信息分层，每层一个核心点
+- 以上统下：每个具体细节都要能追溯到上层的核心结论
+
+## 精准表达
+- 用词精确，避免模糊表述：不说"到时候再说"而说"建议周五下午3点前确定方案"
+- 量化一切可以量化的信息：时间、数量、进度、预算
+- 对承诺负责：如果你的消息中包含承诺（"我会在X日前完成Y"），确保它是可兑现的
+- 避免情绪化表达：工作沟通中不带个人情绪，用事实和专业说话
+
+## 高效结构
+- 开头：根据与对方的关系和之前的对话风格，选择"礼貌问候+切入主题"或"直接切入主题"
+- 主体：每个要点换行，用数字或关键词开头（"1. ...""2. ..."或"关于A问题：... 关于B问题：..."）
+- 结尾：明确的行动项——谁、做什么、什么时候。如有必要，加上"如有疑问请随时联系"
+
+# 场景适配
+阅读完整聊天记录，注意以下细节：
+- 对方的Title和角色：和上级/平级/下级的沟通策略不同
+- 对话的历史：是否有未回复的消息？是否有上次未完的话题？
+- 紧急程度：如果对方的消息有明显的时间压力，优先回应紧急事项
+- 文化背景：如果是跨文化沟通，注意表达方式的调整
+
+# 禁忌
+- 不使用网络用语、口语化表达和表情包
+- 不传递未经确认的信息（"听说是..."）
+- 不在正式沟通中讨论与工作无关的个人话题
+- 不使用可能引起歧义的缩写或简称（除非双方都确认过含义）
+
+# 消息阅读顺序
+聊天记录中 ⚡ 标记的消息是对方最新发给你的。你应该主要针对这些最新消息做回复，前面的历史消息仅供理解上下文。不要回复很早以前的历史消息。
+
+# 输出格式
+只输出回复文本本身。可使用换行和序号来组织信息。不要加"正式回复："之类的标签。` },
+  { id: 'caring', label: '关怀', icon: '🤗', prompt: `# 角色定位
+你是一个细腻温暖、真正在乎对方的人。你的关怀不是客套的关心，而是建立在"我真的在意你"这个前提上的真诚表达。你知道——真正有用的关怀从来不是"加油"和"别难过了"，而是"我在这里"和"我懂你"。
+
+# 关怀的核心哲学
+## 倾听 > 说话
+在回复之前，必须先完成"倾听"这个动作。从完整的聊天记录中理解：
+- 对方现在的真实情绪是什么？（不要只看表面文字，要读字里行间）
+- 造成这种情绪的原因是什么？（是具体的事件还是长期的积累？）
+- 对方需要什么？（倾诉/建议/陪伴/空间？——这四个是完全不同的需求，搞错了反而让对方更难受）
+
+## 具体 > 空泛
+- 不要说"加油，一切都会好起来的"，而要说"我记得你上次提到XX的那个PPT，当时你也觉得很难但最后做得很好——这次也可以的"
+- 不要说"需要帮忙就找我"，而要说"我这周末都有空，你要是想出来走走或者只是想有个人在旁边坐着不说话，我都可以"
+- 不要说"你辛苦了"，而要说"你这周连续加班三天了，真的很拼。身体第一，别硬撑"
+- **具体意味着你记得对方的事情、你认真想过怎么帮助、你的关心是可以落地的**
+
+## 共情 > 指导
+- 先让对方感觉被理解了，再考虑给不给建议
+- 共情句式："听起来确实很..." "如果是我遇到这种情况，我可能也会..." "我能理解你为什么..."
+- 避免"你应该..."句式（除非对方明确在寻求建议）
+- 有些时候对方不是来要答案的，只是想要一个安全的倾诉对象——判断清楚这个需求
+
+## 安全感
+- 让对方感觉在你面前可以脆弱、可以崩溃、可以不用假装一切都好
+- 不评判对方的情绪（"你怎么会这么想"是扼杀关系的句式）
+- 不急于把对方从负面情绪中拉出来——有时候陪伴比解决方案更重要
+
+# 场景校准
+- 对方状态好时：自然地表达温暖，可以说"看到你状态好真的很替你开心"
+- 对方轻度压力/吐槽：倾听+轻度共情+"有什么我能做的吗"
+- 对方中度情绪低落：深度共情+陪伴+不提建议（除非对方主动问）
+- 对方重度情绪/危机：表达坚定的支持+建议寻求专业帮助（如果需要）+确认安全
+- 对方回避/不愿聊：尊重边界，轻点即止——"不想说没关系，我就在这儿"
+
+# 消息阅读顺序
+聊天记录中 ⚡ 标记的消息是对方最新发给你的。你应该主要针对这些最新消息做回复，前面的历史消息仅供理解上下文。不要回复很早以前的历史消息。
+
+# 输出格式
+只输出回复文本本身。语气自然真诚，不要读起来像心理医生或鸡汤文。` },
+  { id: 'custom', label: '自定义', icon: '✏️', prompt: '' },
+]
+
 function ChatPage(props: ChatPageProps) {
   const {
     standaloneSessionWindow = false,
@@ -1501,6 +1716,16 @@ function ChatPage(props: ChatPageProps) {
   // 编辑消息额外状态
   const [editMode, setEditMode] = useState<'raw' | 'fields'>('raw')
   const [tempFields, setTempFields] = useState<XmlField[]>([])
+
+  // AI 生成回复
+  const [aiReplyRole, setAiReplyRole] = useState('friendly')
+  const [aiReplyCustomPrompt, setAiReplyCustomPrompt] = useState(AI_ROLES[0].prompt)
+  const [aiReplyContent, setAiReplyContent] = useState('')
+  const [aiReplyLoading, setAiReplyLoading] = useState(false)
+  const [aiReplyError, setAiReplyError] = useState<string | null>(null)
+  const [aiReplyCopied, setAiReplyCopied] = useState(false)
+  const [showRoleSelector, setShowRoleSelector] = useState(false)
+  const [aiPromptExpanded, setAiPromptExpanded] = useState(false)
 
   // 批量语音转文字相关状态（进度/结果 由全局 store 管理）
   const {
@@ -3510,6 +3735,54 @@ function ChatPage(props: ChatPageProps) {
 
     scheduleWhenIdle(runWhenIdle, { timeout: 1200, fallbackDelay: MESSAGE_LIST_SCROLL_IDLE_MS })
   }, [warmupGroupSenderProfiles])
+
+  // === AI 生成回复 ===
+  const selectedRole = AI_ROLES.find(r => r.id === aiReplyRole)
+
+  const handleAiReplyRoleSelect = useCallback((roleId: string) => {
+    setAiReplyRole(roleId)
+    setShowRoleSelector(false)
+    const role = AI_ROLES.find(r => r.id === roleId)
+    if (role && role.prompt) setAiReplyCustomPrompt(role.prompt)
+    else setAiReplyCustomPrompt('')
+  }, [])
+
+  const handleGenerateAiReply = useCallback(async () => {
+    if (!currentSessionId) { setAiReplyError('无法获取当前会话信息'); return }
+    const active = AI_ROLES.find(r => r.id === aiReplyRole)
+    if (!active) return
+    const prompt = aiReplyCustomPrompt || active.prompt || '请根据聊天上下文生成一条合适的回复'
+    setAiReplyLoading(true); setAiReplyError(null); setAiReplyContent('')
+    try {
+      const r = await window.electronAPI.ai.generateReply({
+        sessionId: currentSessionId, prompt, role: active.label,
+        contextMessages: messages.map(m => ({
+          isSend: m.isSend === 1,
+          content: typeof m.content === 'string' ? m.content : '',
+          createTime: m.createTime
+        }))
+      })
+      if (r.success && r.data) setAiReplyContent(r.data.content)
+      else setAiReplyError(r.error || '生成失败')
+    } catch (e: any) {
+      setAiReplyError(e.message || '异常')
+    } finally {
+      setAiReplyLoading(false)
+    }
+  }, [currentSessionId, aiReplyRole, aiReplyCustomPrompt, messages])
+
+  const handleCopyAndOpenWechat = useCallback(() => {
+    if (!aiReplyContent) return
+    const ta = document.createElement('textarea')
+    ta.value = aiReplyContent
+    document.body.appendChild(ta)
+    ta.select()
+    document.execCommand('copy')
+    document.body.removeChild(ta)
+    setAiReplyCopied(true)
+    setTimeout(() => setAiReplyCopied(false), 2000)
+    try { window.open('weixin://', '_blank') } catch { /* ignore */ }
+  }, [aiReplyContent])
 
   // 加载消息
   const loadMessages = async (
@@ -5890,6 +6163,24 @@ function ChatPage(props: ChatPageProps) {
     })
   }, [currentSessionId, navigate, isGroupChatSession])
 
+  const handleInsightAnalysis = useCallback(() => {
+    if (!currentSessionId) return
+    const name = currentSession?.displayName || currentSession?.username || currentSessionId
+    navigate(`/insight?sessionId=${encodeURIComponent(currentSessionId)}&sessionName=${encodeURIComponent(name)}&isGroup=${isCurrentSessionGroup?'1':'0'}`)
+  }, [currentSessionId, currentSession, isCurrentSessionGroup, navigate])
+
+  const handlePersonaAnalysis = useCallback(() => {
+    if (!currentSessionId) return
+    const name = currentSession?.displayName || currentSession?.username || currentSessionId
+    navigate(`/persona?sessionId=${encodeURIComponent(currentSessionId)}&sessionName=${encodeURIComponent(name)}`)
+  }, [currentSessionId, currentSession, navigate])
+
+  const handleTopicsAnalysis = useCallback(() => {
+    if (!currentSessionId) return
+    const name = currentSession?.displayName || currentSession?.username || currentSessionId
+    navigate(`/topics?sessionId=${encodeURIComponent(currentSessionId)}&sessionName=${encodeURIComponent(name)}&isGroup=${isCurrentSessionGroup?'1':'0'}`)
+  }, [currentSessionId, currentSession, isCurrentSessionGroup, navigate])
+
   // 确认批量语音任务（解密/转写）
   const confirmBatchTranscribe = useCallback(async () => {
     if (!currentSessionId) return
@@ -7066,6 +7357,19 @@ function ChatPage(props: ChatPageProps) {
                     )}
                   </button>
                 )}
+                {!standaloneSessionWindow && (
+                  <>
+                    <button className="icon-btn" onClick={handleInsightAnalysis} disabled={!currentSessionId} title="洞察分析">
+                      <BarChart3 size={18} />
+                    </button>
+                    <button className="icon-btn" onClick={handlePersonaAnalysis} disabled={!currentSessionId || isCurrentSessionGroup} title={isCurrentSessionGroup ? '人物画像仅支持私聊' : '人物画像'}>
+                      <UserCheck size={18} />
+                    </button>
+                    <button className="icon-btn" onClick={handleTopicsAnalysis} disabled={!currentSessionId} title="话题分析">
+                      <Hash size={18} />
+                    </button>
+                  </>
+                )}
                 {!standaloneSessionWindow && isCurrentSessionPrivateSnsSupported && (
                   <button
                     className="icon-btn chat-sns-timeline-btn"
@@ -7688,6 +7992,65 @@ function ChatPage(props: ChatPageProps) {
                 </div>
               )}
             </div>
+
+            {/* AI 生成回复栏 */}
+            {!standaloneSessionWindow && (
+              <div className="ai-reply-bar">
+                <div className="ai-reply-bar-top">
+                  <div className="ai-reply-bar-title"><Bot size={16} /><span>AI 生成回复</span></div>
+                  <div className="ai-reply-role-section">
+                    <span className="ai-reply-label">角色：</span>
+                    <div className="ai-reply-role-selector" onClick={() => setShowRoleSelector(!showRoleSelector)}>
+                      <span className="ai-reply-role-current">{selectedRole?.icon} {selectedRole?.label}</span>
+                      <ChevronDown size={14} />
+                    </div>
+                    {showRoleSelector && (
+                      <div className="ai-reply-role-dropdown">
+                        {AI_ROLES.map(role => (
+                          <button key={role.id} className={`ai-reply-role-option ${aiReplyRole === role.id ? 'active' : ''}`} onClick={() => handleAiReplyRoleSelect(role.id)}>
+                            <span>{role.icon}</span><span>{role.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div className="ai-reply-custom-prompt">
+                    <button className="ai-prompt-toggle" onClick={() => setAiPromptExpanded(!aiPromptExpanded)}>
+                      <span>提示词</span>
+                      {aiPromptExpanded ? <ChevronUp size={14}/> : <ChevronDown size={14}/>}
+                    </button>
+                    {aiPromptExpanded && (
+                      <textarea className="ai-reply-prompt-textarea" value={aiReplyCustomPrompt} onChange={e => setAiReplyCustomPrompt(e.target.value)} placeholder="描述你希望 AI 以什么方式回复..." rows={3} />
+                    )}
+                    {!aiPromptExpanded && aiReplyCustomPrompt && (
+                      <div className="ai-prompt-preview" onClick={() => setAiPromptExpanded(true)}>
+                        {aiReplyCustomPrompt.slice(0, 100)}{aiReplyCustomPrompt.length > 100 ? '...' : ''}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div className="ai-reply-bar-bottom">
+                  <textarea
+                    className="ai-reply-result-textarea"
+                    value={aiReplyContent}
+                    onChange={e => setAiReplyContent(e.target.value)}
+                    placeholder="点击右侧按钮生成 AI 回复..."
+                    rows={4}
+                  />
+                  <div className="ai-reply-bar-actions">
+                    <button className="ai-reply-generate-btn" onClick={handleGenerateAiReply} disabled={aiReplyLoading || !currentSessionId}>
+                      {aiReplyLoading ? <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> : aiReplyContent ? <RefreshCw size={16} /> : <Send size={16} />}
+                      <span>{aiReplyLoading ? '生成中...' : aiReplyContent ? '重新生成' : '生成回复'}</span>
+                    </button>
+                    <button className="ai-reply-copy-wechat-btn" onClick={handleCopyAndOpenWechat} disabled={!aiReplyContent}>
+                      {aiReplyCopied ? <Check size={16} /> : <Copy size={16} />}
+                      <span>{aiReplyCopied ? '已复制' : '复制并弹出微信'}</span>
+                    </button>
+                  </div>
+                  {aiReplyError && <div className="ai-reply-error"><AlertCircle size={14} /><span>{aiReplyError}</span></div>}
+                </div>
+              </div>
+            )}
           </>
         ) : (
           <div className="empty-chat">
@@ -8225,6 +8588,7 @@ function ChatPage(props: ChatPageProps) {
           </button>
         </div>
       )}
+
     </div>
   )
 }

@@ -590,6 +590,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }) => ipcRenderer.invoke('insight:generateFootprintInsight', payload)
   },
 
+  // AI 对话分析 & 回复生成
+  ai: {
+    analyzeChat: (payload: { sessionId: string; prompt: string; analysisType: 'insight' | 'persona' | 'topics'; isGroup?: boolean }) =>
+      ipcRenderer.invoke('ai:analyzeChat', payload),
+    generateReply: (payload: { sessionId: string; prompt: string; role: string; contextMessages: Array<{ isSend: boolean; content: string; createTime: number }> }) =>
+      ipcRenderer.invoke('ai:generateReply', payload)
+  },
+
   social: {
     saveWeiboCookie: (rawInput: string) => ipcRenderer.invoke('social:saveWeiboCookie', rawInput),
     validateWeiboUid: (uid: string) => ipcRenderer.invoke('social:validateWeiboUid', uid)
