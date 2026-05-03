@@ -51,7 +51,8 @@ const tabs: { id: Exclude<SettingsTab, 'insight' | 'aiFootprint'>; label: string
 
 const filteredTabs = tabs.filter(tab => {
   if (tab.id === 'autoDownload') {
-    return (window as any).electronAPI.process.platform === 'win32' && (window as any).electronAPI.process.arch === 'x64'
+    const p = (window as any).electronAPI.process
+    return (p.platform === 'win32' && p.arch === 'x64') || p.platform === 'darwin'
   }
   return true
 })

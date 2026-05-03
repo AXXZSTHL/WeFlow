@@ -3,9 +3,11 @@ import { existsSync } from 'fs'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { isElectronAppPackaged } from './electronRuntime'
-// import { ConfigService } from './config'
 
 const execFileAsync = promisify(execFile)
+
+const SUPPORTED = (process.platform === 'win32' && process.arch === 'x64')
+  || (process.platform === 'darwin')
 
 export class ImageDownloadService {
   private static instance: ImageDownloadService
@@ -35,14 +37,14 @@ export class ImageDownloadService {
 
   private async ensureInitialized(): Promise<boolean> {
     if (this.initialized) return true
-    if (process.platform !== 'win32' || process.arch !== 'x64') return false
+    if (!SUPPORTED) return false
 
     try {
       this.koffi = require('koffi')
-      const dllPath = this.getDllPath()
-      if (!existsSync(dllPath)) return false
+      const libPath = this.getLibPath()
+      if (!existsSync(libPath)) return false
 
-      this.lib = this.koffi.load(dllPath)
+      this.lib = this.koffi.load(libPath)
 
       this.initImgHelper = this.lib.func('bool InitImgHelper(uint32, const char*)')
       this.uninstallImgHelper = this.lib.func('void UninstallImgHelper()')
@@ -56,27 +58,90 @@ export class ImageDownloadService {
     }
   }
 
-  private getDllPath(): string {
+  private getLibPath(): string {
     const isPackaged = isElectronAppPackaged()
     const candidates: string[] = []
-    
-    if (isPackaged) {
-      candidates.push(join(process.resourcesPath, 'resources', 'image', 'win32', 'x64', 'img_helper.dll'))
+
+    if (process.platform === 'darwin') {
+      const dylibName = 'img_helper.dylib'
+      if (isPackaged) {
+        candidates.push(join(process.resourcesPath, 'resources', 'image', 'macos', 'universal', dylibName))
+        candidates.push(join(process.resourcesPath, 'resources', 'image', 'macos', dylibName))
+      } else {
+        candidates.push(join(process.cwd(), 'resources', 'image', 'macos', 'universal', dylibName))
+        candidates.push(join(process.cwd(), 'resources', 'image', 'macos', dylibName))
+      }
     } else {
-      candidates.push(join(process.cwd(), 'resources', 'image', 'win32', 'x64', 'img_helper.dll'))
+      // Windows
+      if (isPackaged) {
+        candidates.push(join(process.resourcesPath, 'resources', 'image', 'win32', 'x64', 'img_helper.dll'))
+      } else {
+        candidates.push(join(process.cwd(), 'resources', 'image', 'win32', 'x64', 'img_helper.dll'))
+      }
     }
 
-    for (const path of candidates) {
-      if (existsSync(path)) return path
+    for (const p of candidates) {
+      if (existsSync(p)) return p
     }
     return candidates[0]
   }
 
   private async findMainWeChatPid(): Promise<number | null> {
+    if (process.platform === 'darwin') {
+      return this.findWeChatPidMacOS()
+    }
+    return this.findWeChatPidWindows()
+  }
+
+  private async findWeChatPidMacOS(): Promise<number | null> {
+    try {
+      // 使用 pgrep 查找微信进程
+      const { stdout } = await execFileAsync('pgrep', ['-f', 'WeChat'])
+      if (!stdout || !stdout.trim()) return null
+
+      const pids = stdout.trim().split('\n').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n) && n > 0)
+      if (pids.length === 0) return null
+
+      // 检查每个 PID 的完整路径，确保是 WeChat.app 而非其他
+      for (const pid of pids) {
+        try {
+          const { stdout: pathOut } = await execFileAsync('ps', ['-p', String(pid), '-o', 'comm='])
+          const name = pathOut.trim()
+          if (name === 'WeChat' || name === 'WeChatAppEx') {
+            return pid
+          }
+        } catch {
+          continue
+        }
+      }
+
+      // 回退：返回第一个 PID
+      return pids[0]
+    } catch {
+      // pgrep 不可用时使用 ps
+      try {
+        const { stdout } = await execFileAsync('ps', ['-eo', 'pid,comm', '-c'])
+        if (!stdout) return null
+        const lines = stdout.split('\n')
+        for (const line of lines) {
+          const parts = line.trim().split(/\s+/)
+          if (parts.length >= 2 && parts[1] === 'WeChat') {
+            const pid = parseInt(parts[0], 10)
+            if (!isNaN(pid) && pid > 0) return pid
+          }
+        }
+        return null
+      } catch {
+        return null
+      }
+    }
+  }
+
+  private async findWeChatPidWindows(): Promise<number | null> {
     try {
       const script = `
-      Get-CimInstance Win32_Process -Filter "Name = 'Weixin.exe'" | 
-      Select-Object ProcessId, CommandLine | 
+      Get-CimInstance Win32_Process -Filter "Name = 'Weixin.exe'" |
+      Select-Object ProcessId, CommandLine |
       ConvertTo-Json -Compress
     `;
 
@@ -98,7 +163,10 @@ export class ImageDownloadService {
 
   async startAutoDownload(whitelist: string[] | string = []): Promise<{ success: boolean; error?: string }> {
     if (!await this.ensureInitialized()) {
-      return { success: false, error: '核心组件初始化失败' }
+      const reason = !SUPPORTED
+        ? `当前平台不支持 (${process.platform} ${process.arch})`
+        : '核心组件初始化失败'
+      return { success: false, error: reason }
     }
 
     if (this.isHooked) {
@@ -195,7 +263,7 @@ export class ImageDownloadService {
     return {
       isHooked: this.isHooked,
       pid: this.currentPid,
-      supported: process.platform === 'win32' && process.arch === 'x64'
+      supported: SUPPORTED
     }
   }
 }
