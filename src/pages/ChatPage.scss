@@ -200,7 +200,7 @@
   }
 
   .batch-export-dialog {
-    width: 440px;
+    width: 660px;
     max-height: 70vh;
     text-align: left;
 
@@ -264,6 +264,13 @@
         white-space: nowrap;
         font-size: 14px;
         color: var(--text-primary);
+      }
+
+      .batch-export-item-time {
+        color: var(--text-tertiary);
+        font-size: 12px;
+        margin-left: 8px;
+        flex-shrink: 0;
       }
 
       .batch-export-item-count {

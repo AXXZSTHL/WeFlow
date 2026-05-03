@@ -1,6 +1,7 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { ChevronLeft, ChevronDown, ChevronUp, Loader2, Sparkles, Copy, Check, RotateCcw, Send, Hash } from 'lucide-react'
+import { ChevronLeft, Loader2, Copy, Check, Send, Hash } from 'lucide-react'
+import * as configService from '../services/config'
 import MarkdownContent from '../components/MarkdownContent'
 import './ChatTopicsPage.scss'
 
@@ -111,11 +112,17 @@ function ChatTopicsPage() {
   const isGroup = sp.get('isGroup') === '1'
 
   const [prompt, setPrompt] = useState(DEFAULT_PROMPT)
-  const [expanded, setExpanded] = useState(false)
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    (async () => {
+      const saved = await configService.getAiTopicsAnalysisPrompt()
+      if (saved) setPrompt(saved)
+    })()
+  }, [])
 
   const analyze = useCallback(async () => {
     if (!sessionId) { setError('缺少会话信息'); return }
@@ -142,22 +149,6 @@ function ChatTopicsPage() {
         <div className="header-info"><h2>话题分析</h2><span className="sub">{sessionName}{isGroup?' (群聊)':''}</span></div>
       </div>
       <div className="topics-content">
-        <div className="prompt-section">
-          <div className="prompt-header">
-            <button className="prompt-expand-btn" onClick={() => setExpanded(!expanded)}>
-              <h3><Sparkles size={16}/><span>话题分析提示词</span></h3>
-              {expanded ? <ChevronUp size={14}/> : <ChevronDown size={14}/>}
-            </button>
-            <button className="reset-btn" onClick={() => setPrompt(DEFAULT_PROMPT)} title="恢复默认提示词">
-              <RotateCcw size={14}/>
-            </button>
-          </div>
-          {expanded ? (
-            <textarea className="prompt-textarea" value={prompt} onChange={e => setPrompt(e.target.value)} rows={12}/>
-          ) : (
-            <div className="prompt-preview" onClick={() => setExpanded(true)}>{prompt.slice(0, 160)}{prompt.length > 160 ? '...' : ''}</div>
-          )}
-        </div>
         <div className="action-bar">
           <button className="analyze-btn" onClick={analyze} disabled={loading||!sessionId}>
             {loading ? <><Loader2 size={18} style={{ animation: 'topics-spin 1s linear infinite' }}/>AI 话题分析中...</> : <><Send size={18}/>开始话题分析</>}

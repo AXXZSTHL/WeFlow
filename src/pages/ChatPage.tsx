@@ -1721,6 +1721,18 @@ function ChatPage(props: ChatPageProps) {
   // AI 生成回复
   const [aiReplyRole, setAiReplyRole] = useState('friendly')
   const [aiReplyCustomPrompt, setAiReplyCustomPrompt] = useState(AI_ROLES[0].prompt)
+  const [aiReplyRolesConfig, setAiReplyRolesConfig] = useState<typeof AI_ROLES>(AI_ROLES)
+  const [aiReplyConfigLoaded, setAiReplyConfigLoaded] = useState(false)
+  useEffect(() => {
+    (async () => {
+      const savedPrompt = await configService.getAiReplyPrompt()
+      if (savedPrompt) { setAiReplyCustomPrompt(savedPrompt); setAiReplyRole('custom') }
+      const savedRoles = await configService.getAiReplyRoles()
+      if (savedRoles.length > 0) setAiReplyRolesConfig(savedRoles as any)
+      setAiReplyConfigLoaded(true)
+    })()
+  }, [])
+  const activeRoles = aiReplyRolesConfig.length > 0 ? aiReplyRolesConfig : AI_ROLES
   const [aiReplyContent, setAiReplyContent] = useState('')
   const [aiReplyLoading, setAiReplyLoading] = useState(false)
   const [aiReplyError, setAiReplyError] = useState<string | null>(null)
@@ -3832,25 +3844,25 @@ function ChatPage(props: ChatPageProps) {
   }, [warmupGroupSenderProfiles])
 
   // === AI 生成回复 ===
-  const selectedRole = AI_ROLES.find(r => r.id === aiReplyRole)
+  const selectedRole = activeRoles.find(r => r.id === aiReplyRole) || activeRoles[0]
 
   const handleAiReplyRoleSelect = useCallback((roleId: string) => {
     setAiReplyRole(roleId)
     setShowRoleSelector(false)
-    const role = AI_ROLES.find(r => r.id === roleId)
+    const role = activeRoles.find(r => r.id === roleId)
     if (role && role.prompt) setAiReplyCustomPrompt(role.prompt)
     else setAiReplyCustomPrompt('')
   }, [])
 
   const handleGenerateAiReply = useCallback(async () => {
     if (!currentSessionId) { setAiReplyError('无法获取当前会话信息'); return }
-    const active = AI_ROLES.find(r => r.id === aiReplyRole)
-    if (!active) return
-    const prompt = aiReplyCustomPrompt || active.prompt || '请根据聊天上下文生成一条合适的回复'
+    const configPrompt = aiReplyConfigLoaded ? aiReplyCustomPrompt : ''
+    const active = activeRoles.find(r => r.id === aiReplyRole)
+    const prompt = configPrompt || active?.prompt || '请根据聊天上下文生成一条合适的回复'
     setAiReplyLoading(true); setAiReplyError(null); setAiReplyContent('')
     try {
       const r = await window.electronAPI.ai.generateReply({
-        sessionId: currentSessionId, prompt, role: active.label,
+        sessionId: currentSessionId, prompt, role: active?.label || 'AI助手',
         contextMessages: messages.map(m => ({
           isSend: m.isSend === 1,
           content: typeof m.content === 'string' ? m.content : '',
@@ -6919,22 +6931,30 @@ function ChatPage(props: ChatPageProps) {
 
   // 批量导出选择状态
   const [batchExportDialog, setBatchExportDialog] = useState<{
-    records: Array<{ msg: any; title: string; count: number }>
+    records: Array<{ msg: any; title: string; count: number; time: string }>
     selected: Set<number>
   } | null>(null)
 
   // 导出当前会话中所有聊天合集为单个 HTML — 弹窗勾选
   const handleExportAllChatRecords = useCallback(async () => {
     if (!currentSessionId || !Array.isArray(messages)) return
+    const fmtTime = (ts: number) => {
+      if (!ts || ts <= 0) return ''
+      const d = new Date(ts > 1e12 ? ts : ts * 1000)
+      if (Number.isNaN(d.getTime())) return ''
+      const pad = (n: number) => String(n).padStart(2, '0')
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+    }
     // 收集所有有 chatRecordList 的消息
-    const found: Array<{ msg: any; title: string; count: number }> = []
+    const found: Array<{ msg: any; title: string; count: number; time: string }> = []
     for (const m of messages) {
       const list = Array.isArray((m as any).chatRecordList) ? (m as any).chatRecordList : []
       if (list.length > 0) {
         found.push({
           msg: m,
           title: String((m as any).chatRecordTitle || '聊天合集').trim(),
-          count: list.length
+          count: list.length,
+          time: fmtTime(m.createTime || 0)
         })
       }
     }
@@ -7326,6 +7346,7 @@ function ChatPage(props: ChatPageProps) {
                       }}
                     />
                     <span className="batch-export-item-title">{rec.title}</span>
+                    {rec.time && <span className="batch-export-item-time">{rec.time}</span>}
                     <span className="batch-export-item-count">{rec.count} 条</span>
                   </label>
                 ))}
@@ -7671,9 +7692,9 @@ function ChatPage(props: ChatPageProps) {
                     className="icon-btn"
                     onClick={handleExportAllChatRecords}
                     disabled={!currentSessionId}
-                    title="导出所有聊天合集为 HTML"
+                    title="批量导出聊天合集"
                   >
-                    <FileText size={18} />
+                    <FolderClosed size={18} />
                   </button>
                 )}
                 {!standaloneSessionWindow && (
@@ -7682,7 +7703,7 @@ function ChatPage(props: ChatPageProps) {
                       <BarChart3 size={18} />
                     </button>
                     <button className="icon-btn" onClick={handlePersonaAnalysis} disabled={!currentSessionId || isCurrentSessionGroup} title={isCurrentSessionGroup ? '人物画像仅支持私聊' : '人物画像'}>
-                      <UserCheck size={18} />
+                      <Bot size={18} />
                     </button>
                     <button className="icon-btn" onClick={handleTopicsAnalysis} disabled={!currentSessionId} title="话题分析">
                       <Hash size={18} />
@@ -8325,25 +8346,11 @@ function ChatPage(props: ChatPageProps) {
                     </div>
                     {showRoleSelector && (
                       <div className="ai-reply-role-dropdown">
-                        {AI_ROLES.map(role => (
+                        {activeRoles.map(role => (
                           <button key={role.id} className={`ai-reply-role-option ${aiReplyRole === role.id ? 'active' : ''}`} onClick={() => handleAiReplyRoleSelect(role.id)}>
                             <span>{role.icon}</span><span>{role.label}</span>
                           </button>
                         ))}
-                      </div>
-                    )}
-                  </div>
-                  <div className="ai-reply-custom-prompt">
-                    <button className="ai-prompt-toggle" onClick={() => setAiPromptExpanded(!aiPromptExpanded)}>
-                      <span>提示词</span>
-                      {aiPromptExpanded ? <ChevronUp size={14}/> : <ChevronDown size={14}/>}
-                    </button>
-                    {aiPromptExpanded && (
-                      <textarea className="ai-reply-prompt-textarea" value={aiReplyCustomPrompt} onChange={e => setAiReplyCustomPrompt(e.target.value)} placeholder="描述你希望 AI 以什么方式回复..." rows={3} />
-                    )}
-                    {!aiPromptExpanded && aiReplyCustomPrompt && (
-                      <div className="ai-prompt-preview" onClick={() => setAiPromptExpanded(true)}>
-                        {aiReplyCustomPrompt.slice(0, 100)}{aiReplyCustomPrompt.length > 100 ? '...' : ''}
                       </div>
                     )}
                   </div>
@@ -8610,10 +8617,6 @@ function ChatPage(props: ChatPageProps) {
               <div className="menu-item" onClick={handleExportChatRecordToHtml}>
                 <FileText size={16} />
                 <span>导出聊天合集为 HTML</span>
-              </div>
-              <div className="menu-item" onClick={handleExportChatRecordToWord}>
-                <FileText size={16} />
-                <span>导出聊天合集为 Word</span>
               </div>
               </>
             )}

@@ -189,7 +189,7 @@ const resetUpdaterProviderCache = () => {
 }
 
 const getUpdaterFeedUrlByTrack = (track: 'stable' | 'preview' | 'dev'): string => {
-  const repoBase = 'https://github.com/hicccc77/WeFlow/releases'
+  const repoBase = 'https://github.com/AXXZSTHL/WeFlow/releases'
   if (track === 'stable') return `${repoBase}/latest/download`
   if (track === 'preview') return `${repoBase}/download/nightly-preview`
   return `${repoBase}/download/nightly-dev`

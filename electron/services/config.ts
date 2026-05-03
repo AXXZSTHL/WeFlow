@@ -111,6 +111,12 @@ interface ConfigSchema {
   aiFootprintSystemPrompt: string
   /** 是否将 AI 见解调试日志输出到桌面 */
   aiInsightDebugLogEnabled: boolean
+  // AI 分析提示词
+  aiInsightAnalysisPrompt: string
+  aiPersonaAnalysisPrompt: string
+  aiTopicsAnalysisPrompt: string
+  aiReplyPrompt: string
+  aiReplyRoles: string
 }
 
 interface ConfigStoreLike<T extends Record<string, any>> {
@@ -285,7 +291,12 @@ export class ConfigService {
       aiInsightWeiboBindings: {},
       aiFootprintEnabled: false,
       aiFootprintSystemPrompt: '',
-      aiInsightDebugLogEnabled: false
+      aiInsightDebugLogEnabled: false,
+      aiInsightAnalysisPrompt: '',
+      aiPersonaAnalysisPrompt: '',
+      aiTopicsAnalysisPrompt: '',
+      aiReplyPrompt: '',
+      aiReplyRoles: ''
     }
 
     const cwd = String(process.env.WEFLOW_CONFIG_CWD || process.env.WEFLOW_USER_DATA_PATH || '').trim()

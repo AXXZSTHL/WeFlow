@@ -7,13 +7,13 @@ WeFlow 是一个**完全本地**的微信**实时**聊天记录查看、分析�
 </p>
 
 <p align="center">
-  <a href="https://github.com/hicccc77/WeFlow/stargazers"><img src="https://img.shields.io/github/stars/hicccc77/WeFlow?style=flat&label=Stars&labelColor=1F2937&color=2563EB" alt="Stargazers"></a>
-  <a href="https://github.com/hicccc77/WeFlow/network/members"><img src="https://img.shields.io/github/forks/hicccc77/WeFlow?style=flat&label=Forks&labelColor=1F2937&color=7C3AED" alt="Forks"></a>
-  <a href="https://github.com/hicccc77/WeFlow/issues"><img src="https://img.shields.io/github/issues/hicccc77/WeFlow?style=flat&label=Issues&labelColor=1F2937&color=D97706" alt="Issues"></a>
-  <a href="https://github.com/hicccc77/WeFlow/releases"><img src="https://img.shields.io/github/downloads/hicccc77/WeFlow/total?style=flat&label=Downloads&labelColor=1F2937&color=059669" alt="Downloads"></a>
+  <a href="https://github.com/AXXZSTHL/WeFlow/stargazers"><img src="https://img.shields.io/github/stars/AXXZSTHL/WeFlow?style=flat&label=Stars&labelColor=1F2937&color=2563EB" alt="Stargazers"></a>
+  <a href="https://github.com/AXXZSTHL/WeFlow/network/members"><img src="https://img.shields.io/github/forks/AXXZSTHL/WeFlow?style=flat&label=Forks&labelColor=1F2937&color=7C3AED" alt="Forks"></a>
+  <a href="https://github.com/AXXZSTHL/WeFlow/issues"><img src="https://img.shields.io/github/issues/AXXZSTHL/WeFlow?style=flat&label=Issues&labelColor=1F2937&color=D97706" alt="Issues"></a>
+  <a href="https://github.com/AXXZSTHL/WeFlow/releases"><img src="https://img.shields.io/github/downloads/AXXZSTHL/WeFlow/total?style=flat&label=Downloads&labelColor=1F2937&color=059669" alt="Downloads"></a>
   <br><br>
   <a href="https://t.me/weflow_cc"><img src="https://img.shields.io/badge/Telegram-频道-1D9BF0?style=flat&logo=telegram&logoColor=white&labelColor=1F2937&color=1D9BF0" alt="Telegram Channel" style="height: 22px; vertical-align: middle;"></a>
-  <a href="https://www.star-history.com/hicccc77/weflow"><img src="https://api.star-history.com/badge?repo=hicccc77/WeFlow&theme=dark" alt="Star History Rank" style="height: 32px; vertical-align: middle;"></a>
+  <a href="https://www.star-history.com/hicccc77/weflow"><img src="https://api.star-history.com/badge?repo=AXXZSTHL/WeFlow&theme=dark" alt="Star History Rank" style="height: 32px; vertical-align: middle;"></a>
 </p>
 
 > [!TIP]
@@ -42,7 +42,7 @@ WeFlow 是一个**完全本地**的微信**实时**聊天记录查看、分析�
 
 ## 快速开始
 
-若你只想使用成品版本，可前往 [Releases](https://github.com/hicccc77/WeFlow/releases) 下载并安装。
+若你只想使用成品版本，可前往 [Releases](https://github.com/AXXZSTHL/WeFlow/releases) 下载并安装。
 
 > ArchLinux 用户可以选择 `yay -S weflow` 快速安装
 
@@ -84,7 +84,7 @@ WeFlow 提供本地 HTTP API 服务，支持通过接口查询消息数据，可
 
 ```bash
 # 1. 克隆项目到本地
-git clone https://github.com/hicccc77/WeFlow.git
+git clone https://github.com/AXXZSTHL/WeFlow.git
 cd WeFlow
 
 # 2. 安装项目依赖
@@ -107,11 +107,11 @@ npm run dev
 
 ## Star History
 
-<a href="https://www.star-history.com/#hicccc77/WeFlow&type=date&legend=top-left">
+<a href="https://www.star-history.com/#AXXZSTHL/WeFlow&type=date&legend=top-left">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=hicccc77/WeFlow&type=date&theme=dark&legend=top-left" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=hicccc77/WeFlow&type=date&legend=top-left" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=hicccc77/WeFlow&type=date&legend=top-left" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=AXXZSTHL/WeFlow&type=date&theme=dark&legend=top-left" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=AXXZSTHL/WeFlow&type=date&legend=top-left" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=AXXZSTHL/WeFlow&type=date&legend=top-left" />
   </picture>
 </a>
 

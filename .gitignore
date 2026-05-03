@@ -78,3 +78,7 @@ weflow-web-offical
 /Wedecrypt
 /scripts/syncwcdb.py
 /scripts/syncWedecrypt.py
+
+# Publish scripts (contain GitHub Token, DO NOT commit)
+publish.bat
+publish.sh

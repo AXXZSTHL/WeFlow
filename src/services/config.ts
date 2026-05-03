@@ -120,6 +120,13 @@ export const CONFIG_KEYS = {
   AI_FOOTPRINT_ENABLED: 'aiFootprintEnabled',
   AI_FOOTPRINT_SYSTEM_PROMPT: 'aiFootprintSystemPrompt',
   AI_INSIGHT_DEBUG_LOG_ENABLED: 'aiInsightDebugLogEnabled',
+
+  // AI 分析提示词
+  AI_INSIGHT_ANALYSIS_PROMPT: 'aiInsightAnalysisPrompt',
+  AI_PERSONA_ANALYSIS_PROMPT: 'aiPersonaAnalysisPrompt',
+  AI_TOPICS_ANALYSIS_PROMPT: 'aiTopicsAnalysisPrompt',
+  AI_REPLY_PROMPT: 'aiReplyPrompt',
+  AI_REPLY_ROLES: 'aiReplyRoles',
   AUTO_DOWNLOAD_HIGH_RES: 'autoDownloadHighRes',
   AUTO_DOWNLOAD_WHITELIST: 'autoDownloadWhitelist'
 } as const
@@ -2138,6 +2145,50 @@ export async function getAiFootprintSystemPrompt(): Promise<string> {
 
 export async function setAiFootprintSystemPrompt(prompt: string): Promise<void> {
   await config.set(CONFIG_KEYS.AI_FOOTPRINT_SYSTEM_PROMPT, prompt)
+}
+
+export async function getAiInsightAnalysisPrompt(): Promise<string> {
+  const value = await config.get(CONFIG_KEYS.AI_INSIGHT_ANALYSIS_PROMPT)
+  return typeof value === 'string' ? value : ''
+}
+export async function setAiInsightAnalysisPrompt(prompt: string): Promise<void> {
+  await config.set(CONFIG_KEYS.AI_INSIGHT_ANALYSIS_PROMPT, prompt)
+}
+
+export async function getAiPersonaAnalysisPrompt(): Promise<string> {
+  const value = await config.get(CONFIG_KEYS.AI_PERSONA_ANALYSIS_PROMPT)
+  return typeof value === 'string' ? value : ''
+}
+export async function setAiPersonaAnalysisPrompt(prompt: string): Promise<void> {
+  await config.set(CONFIG_KEYS.AI_PERSONA_ANALYSIS_PROMPT, prompt)
+}
+
+export async function getAiTopicsAnalysisPrompt(): Promise<string> {
+  const value = await config.get(CONFIG_KEYS.AI_TOPICS_ANALYSIS_PROMPT)
+  return typeof value === 'string' ? value : ''
+}
+export async function setAiTopicsAnalysisPrompt(prompt: string): Promise<void> {
+  await config.set(CONFIG_KEYS.AI_TOPICS_ANALYSIS_PROMPT, prompt)
+}
+
+export async function getAiReplyPrompt(): Promise<string> {
+  const value = await config.get(CONFIG_KEYS.AI_REPLY_PROMPT)
+  return typeof value === 'string' ? value : ''
+}
+export async function setAiReplyPrompt(prompt: string): Promise<void> {
+  await config.set(CONFIG_KEYS.AI_REPLY_PROMPT, prompt)
+}
+
+export interface AiReplyRole { id: string; label: string; icon: string; prompt: string }
+export async function getAiReplyRoles(): Promise<AiReplyRole[]> {
+  const value = await config.get(CONFIG_KEYS.AI_REPLY_ROLES)
+  if (typeof value === 'string' && value) {
+    try { const parsed = JSON.parse(value); if (Array.isArray(parsed)) return parsed } catch {}
+  }
+  return []
+}
+export async function setAiReplyRoles(roles: AiReplyRole[]): Promise<void> {
+  await config.set(CONFIG_KEYS.AI_REPLY_ROLES, JSON.stringify(roles))
 }
 
 export async function getAiInsightDebugLogEnabled(): Promise<boolean> {
