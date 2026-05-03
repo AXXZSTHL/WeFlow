@@ -1,8 +1,8 @@
-import { app } from 'electron'
 import { join } from 'path'
 import { existsSync } from 'fs'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
+import { isElectronAppPackaged } from './electronRuntime'
 // import { ConfigService } from './config'
 
 const execFileAsync = promisify(execFile)
@@ -57,7 +57,7 @@ export class ImageDownloadService {
   }
 
   private getDllPath(): string {
-    const isPackaged = app.isPackaged
+    const isPackaged = isElectronAppPackaged()
     const candidates: string[] = []
     
     if (isPackaged) {
