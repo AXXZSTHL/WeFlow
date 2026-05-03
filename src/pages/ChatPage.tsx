@@ -1682,6 +1682,7 @@ function ChatPage(props: ChatPageProps) {
   const [isRefreshingGroupMembers, setIsRefreshingGroupMembers] = useState(false)
   const [groupMemberSearchKeyword, setGroupMemberSearchKeyword] = useState('')
   const [copiedField, setCopiedField] = useState<string | null>(null)
+  const [copiedMessageKey, setCopiedMessageKey] = useState<string | null>(null)
   const [highlightedMessageKeys, setHighlightedMessageKeys] = useState<string[]>([])
   const [isRefreshingSessions, setIsRefreshingSessions] = useState(false)
   const [foldedView, setFoldedView] = useState(false) // 是否在"折叠的群聊"视图
@@ -1804,6 +1805,10 @@ function ChatPage(props: ChatPageProps) {
     message?: Message;
     count?: number;
   }>({ show: false, mode: 'single' })
+
+  const [exportWordPending, setExportWordPending] = useState<{
+    title: string; recordList: any[]; outputPath: string;
+  } | null>(null)
 
   // 联系人信息加载控制
   const isEnrichingRef = useRef(false)
@@ -3128,6 +3133,96 @@ function ChatPage(props: ChatPageProps) {
       setTimeout(() => setCopiedField(null), 1500)
     }
   }, [])
+
+  // 获取消息的可复制文本内容
+  const getMessageCopyText = useCallback((msg: Message): string => {
+    const localType = msg.localType
+    if (localType === 1) {
+      // 文本消息
+      return cleanMessageContent(msg.parsedContent)
+    }
+    if (localType === 3) return '[图片]'
+    if (localType === 34) return '[语音]'
+    if (localType === 43) return '[视频]'
+    if (localType === 47) return '[表情包]'
+    if (localType === 42) {
+      const nick = (msg as any).cardNickname || ''
+      return nick ? `[名片] ${nick}` : '[名片]'
+    }
+    if (localType === 49) {
+      const xmlType = (msg as any).xmlType || ''
+      // 聊天合集
+      if (xmlType === '19' || String((msg as any).appMsgType) === '19') {
+        const recordList = Array.isArray(msg.chatRecordList) ? msg.chatRecordList : []
+        const title = (msg as any).chatRecordTitle || '聊天合集'
+        const lines: string[] = [`[聊天合集] ${title}`]
+        for (const item of recordList) {
+          const sender = item.sourcename ? `${item.sourcename}: ` : ''
+          const text = getChatRecordPreviewText(item)
+          lines.push(`${sender}${text}`)
+        }
+        return lines.join('\n')
+      }
+      // 引用消息
+      if (xmlType === '57') {
+        const content = msg.parsedContent || msg.content || ''
+        const titleMatch = /<title>([\s\S]*?)<\/title>/i.exec(content)
+        const replyText = titleMatch ? cleanMessageContent(titleMatch[1]) : ''
+        const referMatch = /<refermsg>([\s\S]*?)<\/refermsg>/i.exec(content)
+        let quoteText = ''
+        if (referMatch) {
+          const referXml = referMatch[1]
+          const senderMatch = /<displayname>([\s\S]*?)<\/displayname>/i.exec(referXml)
+          const contentMatch = /<content>([\s\S]*?)<\/content>/i.exec(referXml)
+          const typeMatch = /<type>(\d+)<\/type>/i.exec(referXml)
+          const qSender = senderMatch?.[1] || ''
+          const qType = typeMatch?.[1] || '1'
+          const qContent = contentMatch?.[1] || ''
+          if (qType === '3') quoteText = `[引用 ${qSender ? qSender + '：' : ''}[图片]]`
+          else if (qType === '34') quoteText = `[引用 ${qSender ? qSender + '：' : ''}[语音]]`
+          else if (qType === '43') quoteText = `[引用 ${qSender ? qSender + '：' : ''}[视频]]`
+          else if (qType === '47') quoteText = `[引用 ${qSender ? qSender + '：' : ''}[表情包]]`
+          else quoteText = qContent ? `[引用 ${qSender ? qSender + '：' : ''}${qContent}]` : '[引用]'
+        }
+        return replyText ? `${replyText} ${quoteText}` : quoteText
+      }
+      // 文件
+      if (xmlType === '6') {
+        const title = (msg as any).datatitle || (msg as any).fileTitle || ''
+        return title ? `[文件] ${title}` : '[文件]'
+      }
+      return cleanMessageContent(msg.parsedContent) || '[消息]'
+    }
+    return cleanMessageContent(msg.parsedContent) || `[消息]`
+  }, [])
+
+  // 复制消息内容
+  const handleCopyMessage = useCallback(async (msg: Message, messageKey: string) => {
+    const text = getMessageCopyText(msg)
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopiedMessageKey(messageKey)
+      setTimeout(() => setCopiedMessageKey(null), 1500)
+    } catch {
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textarea)
+      setCopiedMessageKey(messageKey)
+      setTimeout(() => setCopiedMessageKey(null), 1500)
+    }
+  }, [getMessageCopyText])
+
+  // 右键菜单 - 复制消息
+  const handleContextMenuCopy = useCallback(() => {
+    if (contextMenu) {
+      const key = getMessageKey(contextMenu.message)
+      handleCopyMessage(contextMenu.message, key)
+      setContextMenu(null)
+    }
+  }, [contextMenu, handleCopyMessage])
 
   // 连接数据库
   const connect = useCallback(async () => {
@@ -6788,17 +6883,159 @@ function ChatPage(props: ChatPageProps) {
       defaultPath,
       filters: [{ name: 'Word 文档', extensions: ['docx'] }]
     })
+    if (!saveResult || saveResult.canceled || !saveResult.filePath) { setContextMenu(null); return }
+
+    setExportWordPending({ title: rawTitle, recordList, outputPath: saveResult.filePath })
+    setContextMenu(null)
+  }, [contextMenu, currentSessionId])
+
+  // 共享：解析聊天记录中的图片为 base64
+  const resolveImagesForExport = useCallback(async (items: any[]): Promise<any[]> => {
+    const result = JSON.parse(JSON.stringify(items)) // 深拷贝避免修改原始数据
+    let total = 0; let ok = 0
+    const walk = async (list: any[]) => {
+      for (const item of list) {
+        if ((item.datatype === 2 || item.datatype === 3) && !item._imageBase64) {
+          total++
+          const md5s = [item.thumbfullmd5, item.fullmd5, item.md5].filter(Boolean) as string[]
+          const ct = Number(item.sourcetime) || 0
+          for (const md5 of md5s) {
+            try {
+              const r = await window.electronAPI.image.resolveCache({ imageMd5: md5, sessionId: currentSessionId || undefined, createTime: ct || undefined })
+              if (r.success && r.localPath && r.localPath.startsWith('data:')) {
+                const m = /^data:[^;]+;base64,(.+)$/i.exec(r.localPath)
+                if (m) { item._imageBase64 = m[1]; item._imageMime = 'image/jpeg'; ok++; break }
+              }
+            } catch {}
+          }
+        }
+        if (item.chatRecordList?.length) await walk(item.chatRecordList)
+      }
+    }
+    await walk(result)
+    console.log(`[WordExport] 图片解析: ${ok}/${total}`)
+    return result
+  }, [currentSessionId])
+
+  // 批量导出选择状态
+  const [batchExportDialog, setBatchExportDialog] = useState<{
+    records: Array<{ msg: any; title: string; count: number }>
+    selected: Set<number>
+  } | null>(null)
+
+  // 导出当前会话中所有聊天合集为单个 HTML — 弹窗勾选
+  const handleExportAllChatRecords = useCallback(async () => {
+    if (!currentSessionId || !Array.isArray(messages)) return
+    // 收集所有有 chatRecordList 的消息
+    const found: Array<{ msg: any; title: string; count: number }> = []
+    for (const m of messages) {
+      const list = Array.isArray((m as any).chatRecordList) ? (m as any).chatRecordList : []
+      if (list.length > 0) {
+        found.push({
+          msg: m,
+          title: String((m as any).chatRecordTitle || '聊天合集').trim(),
+          count: list.length
+        })
+      }
+    }
+    if (found.length === 0) { alert('当前会话中没有聊天合集'); return }
+    setBatchExportDialog({
+      records: found,
+      selected: new Set(found.map((_, i) => i))
+    })
+  }, [currentSessionId, messages])
+
+  // 执行批量导出
+  const doBatchExport = useCallback(async () => {
+    const dialog = batchExportDialog
+    if (!dialog) return
+    setBatchExportDialog(null)
+
+    const selectedRecords = dialog.records.filter((_, i) => dialog.selected.has(i))
+    if (selectedRecords.length === 0) return
+
+    const allItems: any[] = []
+    for (const rec of selectedRecords) {
+      const items = Array.isArray(rec.msg.chatRecordList) ? rec.msg.chatRecordList : []
+      if (items.length > 0) {
+        allItems.push({
+          datatype: 17,
+          sourcename: '',
+          sourcetime: String(rec.msg.createTime || ''),
+          chatRecordTitle: rec.title,
+          chatRecordDesc: `共 ${items.length} 条`,
+          chatRecordList: items
+        })
+      }
+    }
+
+    const sessionName = (currentSession as any)?.displayName || currentSessionId
+    const title = `${sessionName} 的聊天合集`
+    const safeTitle = title.replace(/[\\/:*?"<>|]/g, '_').slice(0, 80)
+    const downloadsPath = await window.electronAPI.app.getDownloadsPath().catch(() => '')
+    const sep = downloadsPath && downloadsPath.includes('\\') ? '\\' : '/'
+    const defaultPath = downloadsPath ? `${downloadsPath}${sep}${safeTitle}.html` : `${safeTitle}.html`
+    const saveResult = await window.electronAPI.dialog.saveFile({
+      title: '导出聊天合集为 HTML',
+      defaultPath,
+      filters: [{ name: 'HTML 文件', extensions: ['html', 'htm'] }]
+    })
     if (!saveResult || saveResult.canceled || !saveResult.filePath) return
 
-    const result = await window.electronAPI.export.exportChatRecordToWord({
-      title: rawTitle,
-      recordList
+    const list = await resolveImagesForExport(allItems)
+    const result = await window.electronAPI.export.exportChatRecordToHtml({
+      title: `${title}（${selectedRecords.length} 个聊天合集）`,
+      recordList: list,
+      includeTime: true,
+      sessionId: currentSessionId || undefined
     }, saveResult.filePath)
+    if (!result.success) alert(`导出失败: ${result.error || '原因未知'}`)
+  }, [batchExportDialog, currentSessionId, currentSession, resolveImagesForExport])
+
+  // 导出 HTML（直接导出，无时间选项）
+  const handleExportChatRecordToHtml = useCallback(async () => {
+    const msg = contextMenu?.message
+    if (!msg || !currentSessionId) return
+    const recordList = Array.isArray(msg.chatRecordList) ? msg.chatRecordList : []
+    if (recordList.length === 0) { alert('该聊天合集没有可导出的记录'); setContextMenu(null); return }
+
+    const rawTitle = String(msg.chatRecordTitle || '聊天合集').trim() || '聊天合集'
+    const safeTitle = rawTitle.replace(/[\\/:*?"<>|]/g, '_').slice(0, 80)
+    const downloadsPath = await window.electronAPI.app.getDownloadsPath().catch(() => '')
+    const sep = downloadsPath && downloadsPath.includes('\\') ? '\\' : '/'
+    const defaultPath = downloadsPath ? `${downloadsPath}${sep}${safeTitle}.html` : `${safeTitle}.html`
+    const saveResult = await window.electronAPI.dialog.saveFile({
+      title: '导出聊天合集为 HTML',
+      defaultPath,
+      filters: [{ name: 'HTML 文件', extensions: ['html', 'htm'] }]
+    })
+    if (!saveResult || saveResult.canceled || !saveResult.filePath) { setContextMenu(null); return }
+    setContextMenu(null)
+
+    const list = await resolveImagesForExport(recordList)
+    const result = await window.electronAPI.export.exportChatRecordToHtml({
+      title: rawTitle, recordList: list, includeTime: true, sessionId: currentSessionId || undefined
+    }, saveResult.filePath)
+    if (!result.success) alert(`导出失败: ${result.error || '原因未知'}`)
+  }, [contextMenu, currentSessionId, resolveImagesForExport])
+
+  // 时间选项确认后执行导出
+  const handleExportWordWithTimeOption = useCallback(async (includeTime: boolean) => {
+    const pending = exportWordPending
+    if (!pending) return
+    setExportWordPending(null)
+
+    const list = await resolveImagesForExport(pending.recordList)
+    const result = await window.electronAPI.export.exportChatRecordToWord({
+      title: pending.title,
+      recordList: list,
+      includeTime,
+      sessionId: currentSessionId || undefined
+    }, pending.outputPath)
     if (!result.success) {
       alert(`导出失败: ${result.error || '原因未知'}`)
     }
-    setContextMenu(null)
-  }, [contextMenu, currentSessionId])
+  }, [exportWordPending, currentSessionId, resolveImagesForExport])
 
   // 确认修改消息
   const handleSaveEdit = useCallback(async () => {
@@ -6970,6 +7207,7 @@ function ChatPage(props: ChatPageProps) {
           autoTranscribeVoiceEnabled={autoTranscribeVoiceEnabled}
           onRequireModelDownload={handleRequireModelDownload}
           onContextMenu={handleContextMenu}
+          onCopy={handleCopyMessage}
           isSelectionMode={isSelectionMode}
           messageKey={messageKey}
           isSelected={selectedMessages.has(messageKey)}
@@ -6989,6 +7227,7 @@ function ChatPage(props: ChatPageProps) {
     autoTranscribeVoiceEnabled,
     handleRequireModelDownload,
     handleContextMenu,
+    handleCopyMessage,
     isSelectionMode,
     selectedMessages,
     handleToggleSelection
@@ -7030,6 +7269,76 @@ function ChatPage(props: ChatPageProps) {
                 }}
               >
                 确定删除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 导出 Word 时间选项对话框 */}
+      {exportWordPending && (
+        <div className="delete-confirm-overlay" onClick={() => setExportWordPending(null)}>
+          <div className="delete-confirm-card" onClick={(e) => e.stopPropagation()}>
+            <div className="confirm-content">
+              <h3>导出聊天合集为 Word</h3>
+              <p>是否在导出内容中包含消息时间？</p>
+            </div>
+            <div className="confirm-actions">
+              <button
+                className="btn-secondary"
+                onClick={() => handleExportWordWithTimeOption(false)}
+              >
+                不包含时间
+              </button>
+              <button
+                className="btn-danger-filled"
+                style={{ background: 'var(--primary)', borderColor: 'var(--primary)' }}
+                onClick={() => handleExportWordWithTimeOption(true)}
+              >
+                包含时间
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 批量导出聊天合集选择对话框 */}
+      {batchExportDialog && (
+        <div className="delete-confirm-overlay" onClick={() => setBatchExportDialog(null)}>
+          <div className="delete-confirm-card batch-export-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="confirm-content">
+              <h3>选择要导出的聊天合集</h3>
+              <div className="batch-export-toolbar">
+                <span className="batch-export-count">共 {batchExportDialog.records.length} 个聊天合集</span>
+                <button className="btn-secondary btn-sm" onClick={() => setBatchExportDialog({ ...batchExportDialog, selected: new Set(batchExportDialog.records.map((_, i) => i)) })}>全选</button>
+                <button className="btn-secondary btn-sm" onClick={() => setBatchExportDialog({ ...batchExportDialog, selected: new Set() })}>取消全选</button>
+              </div>
+              <div className="batch-export-list">
+                {batchExportDialog.records.map((rec, i) => (
+                  <label key={i} className="batch-export-item">
+                    <input
+                      type="checkbox"
+                      checked={batchExportDialog.selected.has(i)}
+                      onChange={() => {
+                        const next = new Set(batchExportDialog.selected)
+                        next.has(i) ? next.delete(i) : next.add(i)
+                        setBatchExportDialog({ ...batchExportDialog, selected: next })
+                      }}
+                    />
+                    <span className="batch-export-item-title">{rec.title}</span>
+                    <span className="batch-export-item-count">{rec.count} 条</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="confirm-actions">
+              <button className="btn-secondary" onClick={() => setBatchExportDialog(null)}>取消</button>
+              <button
+                className="btn-primary-filled"
+                onClick={doBatchExport}
+                disabled={batchExportDialog.selected.size === 0}
+              >
+                导出选中（{batchExportDialog.selected.size}）
               </button>
             </div>
           </div>
@@ -7355,6 +7664,16 @@ function ChatPage(props: ChatPageProps) {
                     ) : (
                       <Download size={18} />
                     )}
+                  </button>
+                )}
+                {!standaloneSessionWindow && (
+                  <button
+                    className="icon-btn"
+                    onClick={handleExportAllChatRecords}
+                    disabled={!currentSessionId}
+                    title="导出所有聊天合集为 HTML"
+                  >
+                    <FileText size={18} />
                   </button>
                 )}
                 {!standaloneSessionWindow && (
@@ -8287,11 +8606,21 @@ function ChatPage(props: ChatPageProps) {
               <span>{contextMenu.message.localType === 1 ? '修改消息' : '编辑源码'}</span>
             </div>
             {Array.isArray(contextMenu.message.chatRecordList) && contextMenu.message.chatRecordList.length > 0 && (
+              <>
+              <div className="menu-item" onClick={handleExportChatRecordToHtml}>
+                <FileText size={16} />
+                <span>导出聊天合集为 HTML</span>
+              </div>
               <div className="menu-item" onClick={handleExportChatRecordToWord}>
                 <FileText size={16} />
                 <span>导出聊天合集为 Word</span>
               </div>
+              </>
             )}
+            <div className="menu-item" onClick={handleContextMenuCopy}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              <span>复制</span>
+            </div>
             <div className="menu-item" onClick={() => {
               setIsSelectionMode(true)
               setSelectedMessages(new Set<string>([getMessageKey(contextMenu.message)]))
@@ -8715,6 +9044,7 @@ function MessageBubble({
   autoTranscribeVoiceEnabled,
   onRequireModelDownload,
   onContextMenu,
+  onCopy,
   isSelectionMode,
   isSelected,
   onToggleSelection
@@ -8729,6 +9059,7 @@ function MessageBubble({
   autoTranscribeVoiceEnabled?: boolean;
   onRequireModelDownload?: (sessionId: string, messageId: string) => void;
   onContextMenu?: (e: React.MouseEvent, message: Message) => void;
+  onCopy?: (message: Message, messageKey: string) => void;
   isSelectionMode?: boolean;
   isSelected?: boolean;
   onToggleSelection?: (messageKey: string, isShiftKey?: boolean) => void;
@@ -11140,7 +11471,8 @@ function MessageBubble({
           </div>
         )}
 
-        <div className={`message-bubble ${bubbleClass} ${isEmoji && message.emojiCdnUrl && !emojiError ? 'emoji' : ''} ${isImage ? 'image' : ''} ${isVoice ? 'voice' : ''}`}
+        <div
+          className={`message-bubble ${bubbleClass} ${isEmoji && message.emojiCdnUrl && !emojiError ? 'emoji' : ''} ${isImage ? 'image' : ''} ${isVoice ? 'voice' : ''}`}
           onContextMenu={(e) => onContextMenu?.(e, message)}
         >
           <div className="bubble-avatar">
@@ -11151,7 +11483,14 @@ function MessageBubble({
               className="bubble-avatar"
             />
           </div>
-          <div className="bubble-body">
+          <div
+            className={`bubble-body ${message.localType === 1 ? 'clickable' : ''}`}
+            onClick={() => {
+              if (message.localType === 1 && !isSelectionMode && onCopy) {
+                onCopy(message, messageKey)
+              }
+            }}
+          >
             {/* 群聊中显示发送者名称 */}
             {isGroupChat && !isSent && (
               <div className="sender-name">
@@ -11222,6 +11561,7 @@ const MemoMessageBubble = React.memo(MessageBubble, (prevProps, nextProps) => {
   if (prevProps.isSelected !== nextProps.isSelected) return false
   if (prevProps.onRequireModelDownload !== nextProps.onRequireModelDownload) return false
   if (prevProps.onContextMenu !== nextProps.onContextMenu) return false
+  if (prevProps.onCopy !== nextProps.onCopy) return false
   if (prevProps.onToggleSelection !== nextProps.onToggleSelection) return false
 
   return (

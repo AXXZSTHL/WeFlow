@@ -647,6 +647,12 @@ export interface ElectronAPI {
       options?: { allowDecrypt?: boolean; allowCacheIndex?: boolean }
     ) => Promise<boolean>
     preloadHardlinkMd5s: (md5List: string[]) => Promise<boolean>
+    resolveAsBase64: (payload: { imageMd5?: string; sessionId?: string; srcMsgLocalid?: number; createTime?: number }) => Promise<{
+      success: boolean
+      base64?: string
+      mime?: string
+      error?: string
+    }>
     onUpdateAvailable: (callback: (payload: { cacheKey: string; imageMd5?: string; imageDatName?: string }) => void) => () => void
     onCacheResolved: (callback: (payload: { cacheKey: string; imageMd5?: string; imageDatName?: string; localPath: string }) => void) => () => void
     onDecryptProgress: (callback: (payload: {
@@ -1112,7 +1118,11 @@ export interface ElectronAPI {
       success: boolean
       error?: string
     }>
-    exportChatRecordToWord: (payload: { title?: string; recordList: ChatRecordItem[] }, outputPath: string) => Promise<{
+    exportChatRecordToWord: (payload: { title?: string; recordList: ChatRecordItem[]; includeTime?: boolean; sessionId?: string }, outputPath: string) => Promise<{
+      success: boolean
+      error?: string
+    }>
+    exportChatRecordToHtml: (payload: { title?: string; recordList: ChatRecordItem[]; includeTime?: boolean; sessionId?: string }, outputPath: string) => Promise<{
       success: boolean
       error?: string
     }>

@@ -2950,6 +2950,91 @@ function registerIpcHandlers() {
       return true
     }
   )
+  ipcMain.handle(
+    'image:resolveAsBase64',
+    async (_, payload: {
+      imageMd5?: string
+      sessionId?: string
+      srcMsgLocalid?: number
+      createTime?: number
+    }): Promise<{ success: boolean; base64?: string; mime?: string; error?: string }> => {
+      const md5 = payload.imageMd5 || ''
+      console.log(`[WordExport] resolveAsBase64: md5=${md5}, sessionId=${payload.sessionId || '无'}, createTime=${payload.createTime || '无'}`)
+      try {
+        // 辅助: 从 localPath 提取 base64（localPath 可能是文件路径或 data URL）
+        const extractBase64 = async (localPath: string): Promise<{ base64: string; mime: string } | null> => {
+          if (localPath.startsWith('data:')) {
+            const dataMatch = /^data:([^;]+);base64,(.+)$/i.exec(localPath)
+            if (dataMatch) return { base64: dataMatch[2], mime: dataMatch[1] }
+          }
+          try {
+            const buffer = await fs.promises.readFile(localPath)
+            if (buffer.length > 0) {
+              const mime = detectMimeFromBuffer(buffer)
+              return { base64: buffer.toString('base64'), mime }
+            }
+          } catch { /* 无法读取文件 */ }
+          return null
+        }
+
+        // 策略1: 缓存查找
+        const result = await imageDecryptService.resolveCachedImage({
+          imageMd5: payload.imageMd5,
+          sessionId: payload.sessionId,
+          createTime: payload.createTime
+        })
+        if (result.success && result.localPath) {
+          const extracted = await extractBase64(result.localPath)
+          if (extracted) {
+            console.log(`[WordExport] resolveAsBase64: 缓存命中 md5=${md5}, size=${extracted.base64.length}`)
+            return { success: true, base64: extracted.base64, mime: extracted.mime }
+          }
+        }
+        // 策略2: 解密
+        const decryptResult = await imageDecryptService.decryptImage({
+          imageMd5: payload.imageMd5,
+          sessionId: payload.sessionId,
+          createTime: payload.createTime
+        })
+        if (decryptResult.success && decryptResult.localPath) {
+          const extracted = await extractBase64(decryptResult.localPath)
+          if (extracted) {
+            console.log(`[WordExport] resolveAsBase64: 解密成功 md5=${md5}, size=${extracted.base64.length}`)
+            return { success: true, base64: extracted.base64, mime: extracted.mime }
+          }
+        }
+        // 策略3: getImageData（匹配 ForwardedImage 策略4）
+        if (payload.sessionId && payload.srcMsgLocalid) {
+          console.log(`[WordExport] resolveAsBase64: 尝试 getImageData sessionId=${payload.sessionId}, localId=${payload.srcMsgLocalid}`)
+          try {
+            const imageData = await chatService.getImageData(payload.sessionId, String(payload.srcMsgLocalid))
+            if (imageData.success && imageData.data) {
+              const mime = 'image/jpeg'
+              console.log(`[WordExport] resolveAsBase64: getImageData 成功, base64长度=${imageData.data.length}`)
+              return { success: true, base64: imageData.data, mime }
+            }
+            console.log(`[WordExport] resolveAsBase64: getImageData 失败, error=${imageData.error || '未知'}`)
+          } catch (e) {
+            console.log(`[WordExport] resolveAsBase64: getImageData 异常, error=${e instanceof Error ? e.message : String(e)}`)
+          }
+        }
+        console.log(`[WordExport] resolveAsBase64: 全部策略失败 md5=${md5}`)
+        return { success: false, error: decryptResult.error || result.error || '未找到图片' }
+      } catch (e) {
+        console.log(`[WordExport] resolveAsBase64: 异常 md5=${md5}, error=${e instanceof Error ? e.message : String(e)}`)
+        return { success: false, error: e instanceof Error ? e.message : String(e) }
+      }
+    }
+  )
+
+function detectMimeFromBuffer(buffer: Buffer): string {
+  if (buffer.length < 4) return 'image/jpeg'
+  if (buffer[0] === 0xFF && buffer[1] === 0xD8) return 'image/jpeg'
+  if (buffer[0] === 0x89 && buffer[1] === 0x50) return 'image/png'
+  if (buffer[0] === 0x47 && buffer[1] === 0x49) return 'image/gif'
+  if (buffer[0] === 0x52 && buffer[1] === 0x49) return 'image/webp'
+  return 'image/jpeg'
+}
 
   // Windows Hello
   ipcMain.handle('auth:hello', async (event, message?: string) => {
@@ -3315,6 +3400,14 @@ function registerIpcHandlers() {
     try {
       if (!outputPath || typeof outputPath !== 'string') return { success: false, error: '缺少导出路径' }
       return await exportService.exportChatRecordToWord(payload || {}, outputPath)
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+  ipcMain.handle('export:exportChatRecordToHtml', async (_, payload: any, outputPath: string) => {
+    try {
+      if (!outputPath || typeof outputPath !== 'string') return { success: false, error: '缺少导出路径' }
+      return await exportService.exportChatRecordToHtml(payload || {}, outputPath)
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }

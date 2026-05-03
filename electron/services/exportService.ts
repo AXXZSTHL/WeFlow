@@ -64,6 +64,19 @@ interface ForwardChatRecordItem {
   chatRecordTitle?: string
   chatRecordDesc?: string
   chatRecordList?: ForwardChatRecordItem[]
+  refermsgXml?: string
+  md5?: string
+  fullmd5?: string
+  thumbfullmd5?: string
+  dataurl?: string
+  datathumburl?: string
+  cdnthumbkey?: string
+  cdndatakey?: string
+  aeskey?: string
+  imgheight?: number
+  imgwidth?: number
+  _imageBase64?: string
+  _imageMime?: string
 }
 
 interface ChatLabExport {
@@ -3353,7 +3366,7 @@ class ExportService {
     const datatypeRaw = datatypeByAttr?.[1] || this.extractXmlValue(body, 'datatype') || '0'
     const datatype = Number.parseInt(datatypeRaw, 10)
     const sourcename = this.decodeHtmlEntities(this.extractXmlValue(body, 'sourcename'))
-    const sourcetime = this.extractXmlValue(body, 'sourcetime')
+    const sourcetime = this.decodeHtmlEntities(this.extractXmlValue(body, 'sourcetime'))
     const sourceheadurl = this.extractXmlValue(body, 'sourceheadurl')
     const datadesc = this.decodeHtmlEntities(this.extractXmlValue(body, 'datadesc') || this.extractXmlValue(body, 'content'))
     const datatitle = this.decodeHtmlEntities(this.extractXmlValue(body, 'datatitle'))
@@ -3372,7 +3385,15 @@ class ExportService {
       (nestedRecordXml && this.extractXmlValue(nestedRecordXml, 'desc')) || datadesc || ''
     )
 
-    if (!sourcename && !datadesc && !datatitle) return null
+    // 提取引用消息 refermsg
+    let refermsgXml: string | undefined
+    const referMsgStart = body.indexOf('<refermsg>')
+    const referMsgEnd = body.indexOf('</refermsg>')
+    if (referMsgStart !== -1 && referMsgEnd !== -1) {
+      refermsgXml = body.substring(referMsgStart, referMsgEnd + 11)
+    }
+
+    if (!sourcename && !datadesc && !datatitle && !refermsgXml) return null
 
     return {
       datatype: Number.isFinite(datatype) ? datatype : 0,
@@ -3385,24 +3406,47 @@ class ExportService {
       datasize: Number.isFinite(datasize) && datasize > 0 ? datasize : undefined,
       chatRecordTitle: chatRecordTitle || undefined,
       chatRecordDesc: chatRecordDesc || undefined,
-      chatRecordList: nestedRecordList && nestedRecordList.length > 0 ? nestedRecordList : undefined
+      chatRecordList: nestedRecordList && nestedRecordList.length > 0 ? nestedRecordList : undefined,
+      refermsgXml,
+      md5: this.extractXmlValue(body, 'md5') || undefined,
+      fullmd5: this.extractXmlValue(body, 'fullmd5') || undefined,
+      thumbfullmd5: this.extractXmlValue(body, 'thumbfullmd5') || undefined,
+      dataurl: this.extractXmlValue(body, 'dataurl') || undefined,
+      datathumburl: this.extractXmlValue(body, 'datathumburl') || undefined,
+      cdnthumbkey: this.extractXmlValue(body, 'cdnthumbkey') || undefined,
+      cdndatakey: this.extractXmlValue(body, 'cdndatakey') || undefined,
+      aeskey: this.extractXmlValue(body, 'aeskey') || undefined
     }
   }
 
   private formatForwardChatRecordItemText(item: ForwardChatRecordItem): string {
     const desc = (item.datadesc || '').trim()
     const title = (item.datatitle || '').trim()
-    if (desc) return desc
-    if (title) return title
+
+    // 引用消息：在描述内容后附加引用信息
+    let quoteSuffix = ''
+    if (item.refermsgXml) {
+      const quote = this.parseQuoteMessage(item.refermsgXml)
+      if (quote.content) {
+        const quoteLabel = quote.sender ? `${quote.sender}：${quote.content}` : quote.content
+        quoteSuffix = desc ? ` [引用 ${quoteLabel}]` : `[引用 ${quoteLabel}]`
+      }
+    }
+
+    if (desc) return desc + quoteSuffix
+    if (title) return title + quoteSuffix
+    if (quoteSuffix) return quoteSuffix
     switch (item.datatype) {
+      case 2:
       case 3: return '[图片]'
-      case 34: return '[语音消息]'
+      case 4:
       case 43: return '[视频]'
+      case 34: return '[语音消息]'
       case 47: return '[表情包]'
-      case 49:
+      case 49: return title ? `[链接] ${title}` : '[链接]'
       case 8: return title ? `[文件] ${title}` : '[文件]'
       case 17: return item.chatRecordDesc || title || '[聊天记录]'
-      default: return '[消息]'
+      default: return desc || title || '[消息]'
     }
   }
 
@@ -6893,22 +6937,64 @@ class ExportService {
   }
 
   async exportChatRecordToWord(
-    payload: { title?: string; recordList?: ForwardChatRecordItem[] },
+    payload: { title?: string; recordList?: ForwardChatRecordItem[]; includeTime?: boolean; sessionId?: string },
     outputPath: string
   ): Promise<{ success: boolean; error?: string }> {
     try {
       const title = String(payload?.title || '聊天合集').trim() || '聊天合集'
       const recordList = Array.isArray(payload?.recordList) ? payload.recordList : []
+      const includeTime = payload?.includeTime !== false
+      const sessionId = payload?.sessionId || ''
       if (recordList.length === 0) return { success: false, error: '聊天合集为空，无法导出' }
+
+      // 收集所有图片条目（仅 _imageBase64 和 CDN dataurl 可解析）
+      const resolvedImages = new Map<number, Buffer>()
+      let imageIndex = 0
+      let base64Count = 0
+      const collectAndResolveImages = async (items: ForwardChatRecordItem[]) => {
+        for (const item of items) {
+          if (item.datatype === 2 || item.datatype === 3) {
+            const idx = imageIndex++
+            let buf: Buffer | null = null
+            if (item._imageBase64) {
+              buf = Buffer.from(item._imageBase64, 'base64')
+              base64Count++
+              console.log(`[WordExport] electron: 图片#${idx} 使用前端base64, len=${item._imageBase64.length}`)
+            } else if (item.dataurl && /^https?:\/\//i.test(item.dataurl)) {
+              try {
+                const controller = new AbortController()
+                const timeout = setTimeout(() => controller.abort(), 10000)
+                const response = await fetch(item.dataurl, { signal: controller.signal })
+                clearTimeout(timeout)
+                if (response.ok) buf = Buffer.from(await response.arrayBuffer())
+              } catch { /* CDN 不可用 */ }
+            }
+            if (buf && buf.length > 100) resolvedImages.set(idx, buf)
+          }
+          if (item.chatRecordList && item.chatRecordList.length > 0) {
+            await collectAndResolveImages(item.chatRecordList)
+          }
+        }
+      }
+      await collectAndResolveImages(recordList)
+      console.log(`[WordExport] electron: 图片总数=${imageIndex}, base64=${base64Count}, resolved=${resolvedImages.size}`)
 
       await fs.promises.mkdir(path.dirname(outputPath), { recursive: true })
       const zip = new JSZip()
-      zip.file('[Content_Types].xml', this.buildDocxContentTypesXml())
       zip.folder('_rels')?.file('.rels', this.buildDocxRootRelsXml())
       const word = zip.folder('word')
-      word?.file('document.xml', this.buildChatRecordDocxDocumentXml(title, recordList))
-      word?.folder('_rels')?.file('document.xml.rels', this.buildDocxDocumentRelsXml())
+      const docXmlResult = this.buildChatRecordDocxDocumentXml(title, recordList, includeTime, resolvedImages)
+      word?.file('document.xml', docXmlResult.xml)
+      word?.folder('_rels')?.file('document.xml.rels', this.buildDocxDocumentRelsXml(docXmlResult.imageRels))
       word?.file('styles.xml', this.buildDocxStylesXml())
+      if (docXmlResult.images.length > 0) {
+        const mediaFolder = word?.folder('media')
+        for (const img of docXmlResult.images) {
+          mediaFolder?.file(img.filename, img.buffer)
+        }
+      }
+
+      zip.file('[Content_Types].xml', this.buildDocxContentTypesXml(docXmlResult.images.length > 0))
 
       const buffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
       await fs.promises.writeFile(outputPath, buffer)
@@ -6918,9 +7004,86 @@ class ExportService {
     }
   }
 
-  private buildDocxContentTypesXml(): string {
+  async exportChatRecordToHtml(
+    payload: { title?: string; recordList?: ForwardChatRecordItem[]; includeTime?: boolean; sessionId?: string },
+    outputPath: string
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const title = String(payload?.title || '聊天合集').trim() || '聊天合集'
+      const recordList = Array.isArray(payload?.recordList) ? payload.recordList : []
+      const includeTime = payload?.includeTime !== false
+      if (recordList.length === 0) return { success: false, error: '聊天合集为空，无法导出' }
+
+      const buildHtmlItem = (item: ForwardChatRecordItem, depth: number): string => {
+        const indent = depth * 20
+        const time = this.formatForwardChatRecordTime(item.sourcetime)
+        const sender = String(item.sourcename || '').trim()
+        const timeHtml = includeTime && time ? ` <span class="time">${this.escapeHtml(time)}</span>` : ''
+
+        let contentHtml = ''
+        if (item.chatRecordList && item.chatRecordList.length > 0) {
+          const nestedTitle = this.escapeHtml(item.chatRecordTitle || item.datatitle || item.chatRecordDesc || '聊天合集')
+          const nestedItems = item.chatRecordList.map((child) => buildHtmlItem(child, depth + 1)).join('\n')
+          contentHtml = `<div class="nested-record"><div class="nested-title">${nestedTitle}（${item.chatRecordList.length} 条）</div>${nestedItems}</div>`
+          return `<div class="msg-item section" style="margin-left:${indent}px">${contentHtml}</div>`
+        } else if ((item.datatype === 2 || item.datatype === 3) && item._imageBase64) {
+          const mime = item._imageMime || 'image/jpeg'
+          contentHtml = `<div class="image-content"><img src="data:${mime};base64,${item._imageBase64}" alt="图片" style="max-width:400px;border-radius:8px;" /></div>`
+        } else {
+          const text = this.formatForwardChatRecordItemText(item)
+          contentHtml = `<div class="text-content">${this.escapeHtml(text)}</div>`
+        }
+
+        return `<div class="msg-item" style="margin-left:${indent}px">
+          <div class="msg-header"><span class="sender">${this.escapeHtml(sender || '未知发送者')}</span>${timeHtml}</div>
+          ${contentHtml}
+        </div>`
+      }
+
+      const itemsHtml = recordList.map((item) => buildHtmlItem(item, 0)).join('\n')
+      const html = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${this.escapeHtml(title)}</title>
+<style>
+  body { font-family: -apple-system, "Microsoft YaHei", sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background: #f5f5f5; color: #333; }
+  h1 { font-size: 1.6em; margin-bottom: 4px; }
+  .count { color: #999; font-size: 0.85em; margin-bottom: 24px; }
+  .msg-item { background: #fff; border-radius: 8px; padding: 12px 16px; margin-bottom: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+  .msg-header { margin-bottom: 4px; }
+  .sender { font-weight: 600; color: #576b95; font-size: 0.9em; }
+  .time { color: #b0b0b0; font-size: 0.8em; margin-left: 8px; }
+  .text-content { font-size: 0.95em; line-height: 1.6; white-space: pre-wrap; word-break: break-all; }
+  .image-content { margin: 6px 0; }
+  .image-content img { display: block; max-width: 100%; height: auto; }
+  .msg-item.section { background: #e8f0fe; border-left: 3px solid #576b95; }
+  .nested-record { margin-top: 4px; }
+  .nested-title { font-weight: 600; color: #576b95; font-size: 0.9em; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+<h1>${this.escapeHtml(title)}</h1>
+<div class="count">共 ${recordList.length} 条聊天记录</div>
+${itemsHtml}
+</body>
+</html>`
+
+      await fs.promises.mkdir(path.dirname(outputPath), { recursive: true })
+      await fs.promises.writeFile(outputPath, html, 'utf-8')
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  private buildDocxContentTypesXml(hasImages?: boolean): string {
+    const imageOverride = hasImages
+      ? '<Default Extension="jpg" ContentType="image/jpeg"/><Default Extension="png" ContentType="image/png"/>'
+      : ''
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>`
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${imageOverride}<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>`
   }
 
   private buildDocxRootRelsXml(): string {
@@ -6928,9 +7091,12 @@ class ExportService {
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`
   }
 
-  private buildDocxDocumentRelsXml(): string {
+  private buildDocxDocumentRelsXml(imageRels?: string[]): string {
+    const imageEntries = (imageRels || []).map((id, i) =>
+      `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image${i + 1}.jpg"/>`
+    ).join('')
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>${imageEntries}</Relationships>`
   }
 
   private buildDocxStylesXml(): string {
@@ -6938,29 +7104,73 @@ class ExportService {
 <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:rPr><w:rFonts w:ascii="Microsoft YaHei" w:eastAsia="Microsoft YaHei"/><w:sz w:val="21"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:rPr><w:b/><w:sz w:val="32"/></w:rPr></w:style></w:styles>`
   }
 
-  private buildChatRecordDocxDocumentXml(title: string, recordList: ForwardChatRecordItem[]): string {
+  private buildChatRecordDocxDocumentXml(
+    title: string,
+    recordList: ForwardChatRecordItem[],
+    includeTime: boolean,
+    resolvedImages: Map<number, Buffer>
+  ): { xml: string; images: { filename: string; buffer: Buffer }[]; imageRels: string[] } {
+    const images: { filename: string; buffer: Buffer }[] = []
+    const imageRels: string[] = []
+    let imageIdx = 0
+
     const body = [
       this.buildDocxParagraph(title, { bold: true, size: 32, after: 240 }),
       this.buildDocxParagraph(`共 ${recordList.length} 条聊天记录`, { color: '666666', size: 20, after: 240 }),
-      ...recordList.flatMap((item) => this.buildChatRecordDocxParagraphs(item, 0))
+      ...recordList.flatMap((item) => this.buildChatRecordDocxParagraphs(item, 0, includeTime, images, imageRels, resolvedImages, { current: 0 }))
     ].join('')
-    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr></w:body></w:document>`
+    const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>${body}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr></w:body></w:document>`
+    return { xml, images, imageRels }
   }
 
-  private buildChatRecordDocxParagraphs(item: ForwardChatRecordItem, depth: number): string[] {
+  private buildChatRecordDocxParagraphs(
+    item: ForwardChatRecordItem,
+    depth: number,
+    includeTime: boolean,
+    images: { filename: string; buffer: Buffer }[],
+    imageRels: string[],
+    resolvedImages: Map<number, Buffer>,
+    imageIdx: { current: number }
+  ): string[] {
     const indent = Math.min(depth, 8) * 420
     const time = this.formatForwardChatRecordTime(item.sourcetime)
     const sender = String(item.sourcename || '未知发送者').trim()
+    const timeStr = includeTime && time ? `  ${time}` : ''
+    const senderLine = includeTime ? `${sender}${timeStr}` : sender
+
+    // 处理图片消息
+    if (item.datatype === 2 || item.datatype === 3) {
+      const idx = imageIdx.current
+      const imgBuf = resolvedImages.get(idx)
+      imageIdx.current++
+      if (imgBuf) {
+        const imgNum = imageIdx.current
+        console.log(`[WordExport] electron: 嵌入图片 idx=${idx} imgNum=${imgNum} size=${imgBuf.length}`)
+        const rId = `rIdImg${imgNum}`
+        const imageName = `image${imgNum}.jpg`
+        images.push({ filename: imageName, buffer: imgBuf })
+        imageRels.push(rId)
+
+        const maxWidthEmu = 600 * 9525
+        const drawingXml = `<w:p><w:pPr><w:ind w:left="${indent}"/></w:pPr><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${maxWidthEmu}" cy="${maxWidthEmu}"/><wp:docPr id="${imgNum + 100}" name="图片${imgNum}"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="${imgNum + 200}" name="图片${imgNum}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="${rId}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${maxWidthEmu}" cy="${maxWidthEmu}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`
+
+        return [
+          this.buildDocxParagraph(senderLine, { color: '666666', size: 18, before: 100, indent }),
+          drawingXml
+        ]
+      }
+    }
+
     const text = item.chatRecordList && item.chatRecordList.length > 0
       ? `[聊天合集] ${item.chatRecordTitle || item.datatitle || item.chatRecordDesc || ''}`.trim()
       : this.formatForwardChatRecordItemText(item)
     const paragraphs = [
-      this.buildDocxParagraph(`${sender}${time ? `  ${time}` : ''}`, { color: '666666', size: 18, before: 100, indent }),
+      this.buildDocxParagraph(senderLine, { color: '666666', size: 18, before: 100, indent }),
       this.buildDocxParagraph(text, { size: 22, after: 80, indent })
     ]
     if (item.chatRecordList && item.chatRecordList.length > 0) {
-      paragraphs.push(...item.chatRecordList.flatMap((child) => this.buildChatRecordDocxParagraphs(child, depth + 1)))
+      paragraphs.push(...item.chatRecordList.flatMap((child) => this.buildChatRecordDocxParagraphs(child, depth + 1, includeTime, images, imageRels, resolvedImages, imageIdx)))
     }
     return paragraphs
   }

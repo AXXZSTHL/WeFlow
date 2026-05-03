@@ -335,6 +335,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ) => ipcRenderer.invoke('image:preload', payloads, options),
     preloadHardlinkMd5s: (md5List: string[]) =>
       ipcRenderer.invoke('image:preloadHardlinkMd5s', md5List),
+    resolveAsBase64: (payload: { imageMd5?: string; sessionId?: string; srcMsgLocalid?: number; createTime?: number }) =>
+      ipcRenderer.invoke('image:resolveAsBase64', payload),
     onUpdateAvailable: (callback: (payload: { cacheKey: string; imageMd5?: string; imageDatName?: string }) => void) => {
       const listener = (_: unknown, payload: { cacheKey: string; imageMd5?: string; imageDatName?: string }) => callback(payload)
       ipcRenderer.on('image:updateAvailable', listener)
@@ -483,6 +485,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('export:exportSession', sessionId, outputPath, options),
     exportChatRecordToWord: (payload: any, outputPath: string) =>
       ipcRenderer.invoke('export:exportChatRecordToWord', payload, outputPath),
+    exportChatRecordToHtml: (payload: any, outputPath: string) =>
+      ipcRenderer.invoke('export:exportChatRecordToHtml', payload, outputPath),
     exportContacts: (outputDir: string, options: any) =>
       ipcRenderer.invoke('export:exportContacts', outputDir, options),
     onProgress: (callback: (payload: {
