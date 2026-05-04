@@ -6934,36 +6934,57 @@ function ChatPage(props: ChatPageProps) {
     records: Array<{ msg: any; title: string; count: number; time: string }>
     selected: Set<number>
   } | null>(null)
+  const [isLoadingChatRecords, setIsLoadingChatRecords] = useState(false)
 
-  // 导出当前会话中所有聊天合集为单个 HTML — 弹窗勾选
+  // 从数据库查询当前会话所有聊天合集（不受消息列表是否已加载的影响）
   const handleExportAllChatRecords = useCallback(async () => {
-    if (!currentSessionId || !Array.isArray(messages)) return
-    const fmtTime = (ts: number) => {
-      if (!ts || ts <= 0) return ''
-      const d = new Date(ts > 1e12 ? ts : ts * 1000)
-      if (Number.isNaN(d.getTime())) return ''
-      const pad = (n: number) => String(n).padStart(2, '0')
-      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-    }
-    // 收集所有有 chatRecordList 的消息
-    const found: Array<{ msg: any; title: string; count: number; time: string }> = []
-    for (const m of messages) {
-      const list = Array.isArray((m as any).chatRecordList) ? (m as any).chatRecordList : []
-      if (list.length > 0) {
-        found.push({
-          msg: m,
-          title: String((m as any).chatRecordTitle || '聊天合集').trim(),
-          count: list.length,
-          time: fmtTime(m.createTime || 0)
-        })
+    if (!currentSessionId) return
+    setIsLoadingChatRecords(true)
+    try {
+      const fmtTime = (ts: number) => {
+        if (!ts || ts <= 0) return ''
+        const d = new Date(ts > 1e12 ? ts : ts * 1000)
+        if (Number.isNaN(d.getTime())) return ''
+        const pad = (n: number) => String(n).padStart(2, '0')
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
       }
+      const result = await window.electronAPI.chat.getChatRecordMessages(currentSessionId)
+      if (!result.success || !Array.isArray(result.messages)) {
+        alert(`查询聊天合集失败: ${result.error || '原因未知'}`)
+        return
+      }
+      const allRecords = result.messages
+      if (allRecords.length === 0) {
+        alert('当前会话中没有聊天合集')
+        return
+      }
+      const found: Array<{ msg: any; title: string; count: number; time: string }> = []
+      for (const m of allRecords) {
+        const list = Array.isArray((m as any).chatRecordList) ? (m as any).chatRecordList : []
+        if (list.length > 0) {
+          found.push({
+            msg: m,
+            title: String((m as any).chatRecordTitle || '聊天合集').trim(),
+            count: list.length,
+            time: fmtTime(m.createTime || 0)
+          })
+        }
+      }
+      if (found.length === 0) {
+        alert('当前会话中没有聊天合集')
+        return
+      }
+      setBatchExportDialog({
+        records: found,
+        selected: new Set(found.map((_, i) => i))
+      })
+    } catch (e) {
+      console.error('查询聊天合集失败:', e)
+      alert(`查询聊天合集失败: ${String(e)}`)
+    } finally {
+      setIsLoadingChatRecords(false)
     }
-    if (found.length === 0) { alert('当前会话中没有聊天合集'); return }
-    setBatchExportDialog({
-      records: found,
-      selected: new Set(found.map((_, i) => i))
-    })
-  }, [currentSessionId, messages])
+  }, [currentSessionId])
 
   // 执行批量导出
   const doBatchExport = useCallback(async () => {
@@ -7691,10 +7712,14 @@ function ChatPage(props: ChatPageProps) {
                   <button
                     className="icon-btn"
                     onClick={handleExportAllChatRecords}
-                    disabled={!currentSessionId}
-                    title="批量导出聊天合集"
+                    disabled={!currentSessionId || isLoadingChatRecords}
+                    title={isLoadingChatRecords ? '正在从数据库查询聊天合集' : '批量导出聊天合集'}
                   >
-                    <FolderClosed size={18} />
+                    {isLoadingChatRecords ? (
+                      <Loader2 size={18} className="spin" />
+                    ) : (
+                      <FolderClosed size={18} />
+                    )}
                   </button>
                 )}
                 {!standaloneSessionWindow && (

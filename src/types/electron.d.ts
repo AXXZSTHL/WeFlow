@@ -329,6 +329,11 @@ export interface ElectronAPI {
       messages?: Message[]
       error?: string
     }>
+    getChatRecordMessages: (sessionId: string) => Promise<{
+      success: boolean
+      messages?: Message[]
+      error?: string
+    }>
     getCachedMessages: (sessionId: string) => Promise<{
       success: boolean
       messages?: Message[]

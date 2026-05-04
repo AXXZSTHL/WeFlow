@@ -200,6 +200,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('chat:getLatestMessages', sessionId, limit),
     getNewMessages: (sessionId: string, minTime: number, limit?: number) =>
       ipcRenderer.invoke('chat:getNewMessages', sessionId, minTime, limit),
+    getChatRecordMessages: (sessionId: string) => ipcRenderer.invoke('chat:getChatRecordMessages', sessionId),
     getContact: (username: string) => ipcRenderer.invoke('chat:getContact', username),
     getContactAvatar: (username: string) => ipcRenderer.invoke('chat:getContactAvatar', username),
     updateMessage: (sessionId: string, localId: number, createTime: number, newContent: string) =>

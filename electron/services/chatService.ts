@@ -8762,6 +8762,61 @@ class ChatService {
   }
 
   /**
+   * 从数据库查询当前会话的全部聊天合集消息（逐批扫描，不再受前端分页已加载范围限制）
+   */
+  async getChatRecordMessages(
+    sessionId: string
+  ): Promise<{ success: boolean; messages?: Message[]; error?: string }> {
+    try {
+      const connectResult = await this.ensureConnected()
+      if (!connectResult.success) {
+        return { success: false, error: connectResult.error || '数据库未连接' }
+      }
+
+      // 用游标扫描全部消息，确保无论消息的 localType 是什么都能覆盖到
+      const cursorResult = await wcdbService.openMessageCursor(sessionId, 500, false, 0, 0)
+      if (!cursorResult.success || cursorResult.cursor == null) {
+        return { success: false, error: cursorResult.error || '打开消息游标失败' }
+      }
+      const cursor = cursorResult.cursor
+
+      const chatRecords: Message[] = []
+      try {
+        while (true) {
+          const batch = await wcdbService.fetchMessageBatch(cursor)
+          if (!batch.success || !Array.isArray(batch.rows) || batch.rows.length === 0) break
+
+          const messages = this.mapRowsToMessages(batch.rows as Record<string, any>[])
+          for (const msg of messages) {
+            if (Array.isArray((msg as any).chatRecordList) && (msg as any).chatRecordList.length > 0) {
+              chatRecords.push(msg)
+            }
+          }
+
+          if (!batch.hasMore) break
+        }
+      } finally {
+        await wcdbService.closeMessageCursor(cursor).catch(() => {})
+      }
+
+      chatRecords.sort((a, b) => b.createTime - a.createTime)
+
+      const seen = new Set<string>()
+      const unique = chatRecords.filter((msg) => {
+        const key = `${msg.serverId}-${msg.localId}-${msg.createTime}-${msg.sortSeq}`
+        if (seen.has(key)) return false
+        seen.add(key)
+        return true
+      })
+
+      return { success: true, messages: unique }
+    } catch (e) {
+      console.error('[ChatService] 获取聊天合集失败:', e)
+      return { success: false, error: String(e) }
+    }
+  }
+
+  /**
    * 获取某会话中有消息的日期列表
    * 返回 YYYY-MM-DD 格式的日期字符串数组
    */
