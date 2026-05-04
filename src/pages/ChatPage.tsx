@@ -6933,29 +6933,41 @@ function ChatPage(props: ChatPageProps) {
   const [batchExportDialog, setBatchExportDialog] = useState<{
     records: Array<{ msg: any; title: string; count: number; time: string }>
     selected: Set<number>
+    startDate: string
+    endDate: string
+    includeTime: boolean
   } | null>(null)
   const [isLoadingChatRecords, setIsLoadingChatRecords] = useState(false)
 
+  const fmtTime = useCallback((ts: number) => {
+    if (!ts || ts <= 0) return ''
+    const d = new Date(ts > 1e12 ? ts : ts * 1000)
+    if (Number.isNaN(d.getTime())) return ''
+    const pad = (n: number) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+  }, [])
+
   // 从数据库查询当前会话所有聊天合集（不受消息列表是否已加载的影响）
-  const handleExportAllChatRecords = useCallback(async () => {
+  const queryChatRecordsFromDB = useCallback(async (startDate: string, endDate: string) => {
     if (!currentSessionId) return
     setIsLoadingChatRecords(true)
     try {
-      const fmtTime = (ts: number) => {
-        if (!ts || ts <= 0) return ''
-        const d = new Date(ts > 1e12 ? ts : ts * 1000)
-        if (Number.isNaN(d.getTime())) return ''
-        const pad = (n: number) => String(n).padStart(2, '0')
-        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+      let beginTimestamp = 0
+      let endTimestamp = 0
+      if (startDate) {
+        beginTimestamp = new Date(startDate + 'T00:00:00').getTime()
       }
-      const result = await window.electronAPI.chat.getChatRecordMessages(currentSessionId)
+      if (endDate) {
+        endTimestamp = new Date(endDate + 'T23:59:59.999').getTime()
+      }
+      const result = await window.electronAPI.chat.getChatRecordMessages(currentSessionId, beginTimestamp, endTimestamp)
       if (!result.success || !Array.isArray(result.messages)) {
         alert(`查询聊天合集失败: ${result.error || '原因未知'}`)
         return
       }
       const allRecords = result.messages
       if (allRecords.length === 0) {
-        alert('当前会话中没有聊天合集')
+        alert('当前时间范围内没有聊天合集')
         return
       }
       const found: Array<{ msg: any; title: string; count: number; time: string }> = []
@@ -6971,12 +6983,15 @@ function ChatPage(props: ChatPageProps) {
         }
       }
       if (found.length === 0) {
-        alert('当前会话中没有聊天合集')
+        alert('当前时间范围内没有聊天合集')
         return
       }
       setBatchExportDialog({
         records: found,
-        selected: new Set(found.map((_, i) => i))
+        selected: new Set(found.map((_, i) => i)),
+        startDate,
+        endDate,
+        includeTime: true
       })
     } catch (e) {
       console.error('查询聊天合集失败:', e)
@@ -6984,7 +6999,21 @@ function ChatPage(props: ChatPageProps) {
     } finally {
       setIsLoadingChatRecords(false)
     }
-  }, [currentSessionId])
+  }, [currentSessionId, fmtTime])
+
+  // 点击按钮：打开时间范围选择对话框
+  const handleExportAllChatRecords = useCallback(() => {
+    if (!currentSessionId) return
+    // 直接展示带时间筛选的对话框，并立即执行一次全部查询
+    setBatchExportDialog({
+      records: [],
+      selected: new Set(),
+      startDate: '',
+      endDate: '',
+      includeTime: true
+    })
+    queryChatRecordsFromDB('', '')
+  }, [currentSessionId, queryChatRecordsFromDB])
 
   // 执行批量导出
   const doBatchExport = useCallback(async () => {
@@ -7027,7 +7056,7 @@ function ChatPage(props: ChatPageProps) {
     const result = await window.electronAPI.export.exportChatRecordToHtml({
       title: `${title}（${selectedRecords.length} 个聊天合集）`,
       recordList: list,
-      includeTime: true,
+      includeTime: dialog.includeTime,
       sessionId: currentSessionId || undefined
     }, saveResult.filePath)
     if (!result.success) alert(`导出失败: ${result.error || '原因未知'}`)
@@ -7349,36 +7378,80 @@ function ChatPage(props: ChatPageProps) {
           <div className="delete-confirm-card batch-export-dialog" onClick={(e) => e.stopPropagation()}>
             <div className="confirm-content">
               <h3>选择要导出的聊天合集</h3>
-              <div className="batch-export-toolbar">
-                <span className="batch-export-count">共 {batchExportDialog.records.length} 个聊天合集</span>
-                <button className="btn-secondary btn-sm" onClick={() => setBatchExportDialog({ ...batchExportDialog, selected: new Set(batchExportDialog.records.map((_, i) => i)) })}>全选</button>
-                <button className="btn-secondary btn-sm" onClick={() => setBatchExportDialog({ ...batchExportDialog, selected: new Set() })}>取消全选</button>
+              <div className="batch-export-time-filter">
+                <label className="time-filter-label">
+                  开始日期
+                  <input
+                    type="date"
+                    className="time-filter-input"
+                    value={batchExportDialog.startDate}
+                    onChange={(e) => setBatchExportDialog({ ...batchExportDialog, startDate: e.target.value })}
+                  />
+                </label>
+                <label className="time-filter-label">
+                  结束日期
+                  <input
+                    type="date"
+                    className="time-filter-input"
+                    value={batchExportDialog.endDate}
+                    onChange={(e) => setBatchExportDialog({ ...batchExportDialog, endDate: e.target.value })}
+                  />
+                </label>
+                <button
+                  className="btn-primary-filled btn-sm"
+                  disabled={isLoadingChatRecords}
+                  onClick={() => queryChatRecordsFromDB(batchExportDialog.startDate, batchExportDialog.endDate)}
+                >
+                  {isLoadingChatRecords ? '查询中...' : '查询'}
+                </button>
               </div>
-              <div className="batch-export-list">
-                {batchExportDialog.records.map((rec, i) => (
-                  <label key={i} className="batch-export-item">
-                    <input
-                      type="checkbox"
-                      checked={batchExportDialog.selected.has(i)}
-                      onChange={() => {
-                        const next = new Set(batchExportDialog.selected)
-                        next.has(i) ? next.delete(i) : next.add(i)
-                        setBatchExportDialog({ ...batchExportDialog, selected: next })
-                      }}
-                    />
-                    <span className="batch-export-item-title">{rec.title}</span>
-                    {rec.time && <span className="batch-export-item-time">{rec.time}</span>}
-                    <span className="batch-export-item-count">{rec.count} 条</span>
-                  </label>
-                ))}
-              </div>
+              {isLoadingChatRecords && batchExportDialog.records.length === 0 && (
+                <div className="batch-export-loading"><Loader2 size={20} className="spin" /> 正在从数据库查询聊天合集...</div>
+              )}
+              {!isLoadingChatRecords && batchExportDialog.records.length > 0 && (
+                <>
+                  <div className="batch-export-toolbar">
+                    <span className="batch-export-count">共 {batchExportDialog.records.length} 个聊天合集</span>
+                    <button className="btn-secondary btn-sm" onClick={() => setBatchExportDialog({ ...batchExportDialog, selected: new Set(batchExportDialog.records.map((_, i) => i)) })}>全选</button>
+                    <button className="btn-secondary btn-sm" onClick={() => setBatchExportDialog({ ...batchExportDialog, selected: new Set() })}>取消全选</button>
+                  </div>
+                  <div className="batch-export-list">
+                    {batchExportDialog.records.map((rec, i) => (
+                      <label key={i} className="batch-export-item">
+                        <input
+                          type="checkbox"
+                          checked={batchExportDialog.selected.has(i)}
+                          onChange={() => {
+                            const next = new Set(batchExportDialog.selected)
+                            next.has(i) ? next.delete(i) : next.add(i)
+                            setBatchExportDialog({ ...batchExportDialog, selected: next })
+                          }}
+                        />
+                        <span className="batch-export-item-title">{rec.title}</span>
+                        {rec.time && <span className="batch-export-item-time">{rec.time}</span>}
+                        <span className="batch-export-item-count">{rec.count} 条</span>
+                      </label>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+            <div className="batch-export-options">
+              <label className="export-option-label">
+                <input
+                  type="checkbox"
+                  checked={batchExportDialog.includeTime}
+                  onChange={(e) => setBatchExportDialog({ ...batchExportDialog, includeTime: e.target.checked })}
+                />
+                导出时包含时间
+              </label>
             </div>
             <div className="confirm-actions">
               <button className="btn-secondary" onClick={() => setBatchExportDialog(null)}>取消</button>
               <button
                 className="btn-primary-filled"
                 onClick={doBatchExport}
-                disabled={batchExportDialog.selected.size === 0}
+                disabled={batchExportDialog.selected.size === 0 || batchExportDialog.records.length === 0}
               >
                 导出选中（{batchExportDialog.selected.size}）
               </button>

@@ -329,7 +329,7 @@ export interface ElectronAPI {
       messages?: Message[]
       error?: string
     }>
-    getChatRecordMessages: (sessionId: string) => Promise<{
+    getChatRecordMessages: (sessionId: string, beginTimestamp?: number, endTimestamp?: number) => Promise<{
       success: boolean
       messages?: Message[]
       error?: string

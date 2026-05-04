@@ -2293,8 +2293,8 @@ function registerIpcHandlers() {
     return chatService.getAntiRevokeSessions()
   })
 
-  ipcMain.handle('chat:getChatRecordMessages', async (_, sessionId: string) => {
-    return chatService.getChatRecordMessages(sessionId)
+  ipcMain.handle('chat:getChatRecordMessages', async (_, sessionId: string, beginTimestamp?: number, endTimestamp?: number) => {
+    return chatService.getChatRecordMessages(sessionId, beginTimestamp, endTimestamp)
   })
 
   ipcMain.handle('chat:updateMessage', async (_, sessionId: string, localId: number, createTime: number, newContent: string) => {

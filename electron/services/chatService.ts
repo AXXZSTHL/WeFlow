@@ -8763,9 +8763,13 @@ class ChatService {
 
   /**
    * 从数据库查询当前会话的全部聊天合集消息（逐批扫描，不再受前端分页已加载范围限制）
+   * @param beginTimestamp 可选，起始时间（秒或毫秒）
+   * @param endTimestamp 可选，结束时间（秒或毫秒）
    */
   async getChatRecordMessages(
-    sessionId: string
+    sessionId: string,
+    beginTimestamp: number = 0,
+    endTimestamp: number = 0
   ): Promise<{ success: boolean; messages?: Message[]; error?: string }> {
     try {
       const connectResult = await this.ensureConnected()
@@ -8773,8 +8777,12 @@ class ChatService {
         return { success: false, error: connectResult.error || '数据库未连接' }
       }
 
-      // 用游标扫描全部消息，确保无论消息的 localType 是什么都能覆盖到
-      const cursorResult = await wcdbService.openMessageCursor(sessionId, 500, false, 0, 0)
+      // 自动检测毫秒/秒并统一转为秒
+      const beginTs = beginTimestamp > 10000000000 ? Math.floor(beginTimestamp / 1000) : beginTimestamp
+      const endTs = endTimestamp > 10000000000 ? Math.floor(endTimestamp / 1000) : endTimestamp
+
+      // 用游标扫描，时间范围直接传给底层减少无效扫描
+      const cursorResult = await wcdbService.openMessageCursor(sessionId, 500, false, beginTs, endTs)
       if (!cursorResult.success || cursorResult.cursor == null) {
         return { success: false, error: cursorResult.error || '打开消息游标失败' }
       }
