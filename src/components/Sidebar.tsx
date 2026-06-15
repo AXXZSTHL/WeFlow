@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
-import { Home, MessageSquare, BarChart3, FileText, Settings, Download, Aperture, UserCircle, Lock, LockOpen, ChevronUp, FolderClosed, Footprints, Users, ArchiveRestore } from 'lucide-react'
+import { Home, MessageSquare, BarChart3, FileText, Settings, Download, Aperture, UserCircle, Lock, LockOpen, ChevronUp, FolderClosed, Footprints, Users, ArchiveRestore, Bot } from 'lucide-react'
 import { useAppStore } from '../stores/appStore'
 import * as configService from '../services/config'
 import { onExportSessionStatus, requestExportSessionStatus } from '../services/exportBridge'
@@ -332,6 +332,16 @@ function Sidebar({ collapsed }: SidebarProps) {
           >
             <span className="nav-icon"><MessageSquare size={20} /></span>
             <span className="nav-label">聊天</span>
+          </NavLink>
+
+          {/* AI 分身库 */}
+          <NavLink
+            to="/ai-persona"
+            className={`nav-item ${isActive('/ai-persona') ? 'active' : ''}`}
+            title={collapsed ? 'AI 分身库' : undefined}
+          >
+            <span className="nav-icon"><Bot size={20} /></span>
+            <span className="nav-label">AI 分身库</span>
           </NavLink>
 
           {/* 朋友圈 */}

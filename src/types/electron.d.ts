@@ -149,6 +149,21 @@ export interface ElectronAPI {
     openPath: (path: string) => Promise<string>
     openExternal: (url: string) => Promise<void>
   }
+  wechatRpa: {
+    sendReply: (payload: {
+      targetCandidates: string[]
+      message: string
+      autoSend?: boolean
+      launchIfNeeded?: boolean
+    }) => Promise<{
+      success: boolean
+      error?: string
+      targetUsed?: string
+      sent?: boolean
+      opened?: boolean
+      steps?: string[]
+    }>
+  }
   app: {
     getDownloadsPath: () => Promise<string>
     getVersion: () => Promise<string>
@@ -1276,6 +1291,23 @@ export interface ElectronAPI {
       sessionId: string; prompt: string; role: string
       contextMessages: Array<{ isSend: boolean; content: string; createTime: number }>
     }) => Promise<{ success: boolean; data?: { content: string }; error?: string }>
+  }
+  aiPersona: {
+    list: () => Promise<{ success: boolean; data?: import('./aiPersona').PersonaListItem[]; error?: string }>
+    get: (id: string) => Promise<{ success: boolean; data?: import('./aiPersona').AiPersonaProfile; error?: string }>
+    getBySession: (sessionId: string) => Promise<{ success: boolean; data?: import('./aiPersona').AiPersonaProfile; error?: string }>
+    create: (payload: { sessionId: string; options: import('./aiPersona').CreatePersonaOptions }) => Promise<{ success: boolean; data?: import('./aiPersona').AiPersonaProfile; error?: string }>
+    createSelf: (payload: { sessionIds: string[]; options: import('./aiPersona').CreatePersonaOptions }) => Promise<{ success: boolean; data?: import('./aiPersona').AiPersonaProfile; error?: string }>
+    update: (payload: { id: string; options: import('./aiPersona').CreatePersonaOptions }) => Promise<{ success: boolean; data?: import('./aiPersona').AiPersonaProfile; error?: string }>
+    delete: (id: string) => Promise<{ success: boolean; error?: string }>
+    updatePromptSkill: (payload: { id: string; promptSkill: string }) => Promise<{ success: boolean; data?: import('./aiPersona').AiPersonaProfile; error?: string }>
+    updateField: (payload: { id: string; field: string; value: unknown }) => Promise<{ success: boolean; data?: import('./aiPersona').AiPersonaProfile; error?: string }>
+    getConversation: (personaId: string) => Promise<{ success: boolean; data?: import('./aiPersona').AiPersonaConversation; error?: string }>
+    listKnowledge: (personaId: string) => Promise<{ success: boolean; data?: import('./aiPersona').PersonaKnowledgeItem[]; error?: string }>
+    updateKnowledgeItem: (payload: { personaId: string; itemId: string; patch: { title?: string; summary?: string; rawText?: string; tags?: string[]; status?: 'active' | 'pinned' | 'excluded'; importance?: number; confidence?: number } }) => Promise<{ success: boolean; data?: import('./aiPersona').PersonaKnowledgeItem; error?: string }>
+    listAnswerTraces: (personaId: string) => Promise<{ success: boolean; data?: import('./aiPersona').PersonaAnswerTrace[]; error?: string }>
+    chat: (payload: { personaId: string; message: string }) => Promise<{ success: boolean; data?: { content: string }; error?: string }>
+    generateReply: (payload: { personaId: string; goal: string; contextMessages: Array<{ isSend: boolean; content: string; createTime: number }>; draftText?: string; toneOverride?: string }) => Promise<{ success: boolean; data?: { content: string }; error?: string }>
   }
 }
 

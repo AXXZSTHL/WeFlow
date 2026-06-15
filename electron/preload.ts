@@ -54,6 +54,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url)
   },
 
+  wechatRpa: {
+    sendReply: (payload: { targetCandidates: string[]; message: string; autoSend?: boolean; launchIfNeeded?: boolean }) =>
+      ipcRenderer.invoke('wechatRpa:sendReply', payload)
+  },
+
   // App
   app: {
     getDownloadsPath: () => ipcRenderer.invoke('app:getDownloadsPath'),
@@ -602,6 +607,27 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('ai:analyzeChat', payload),
     generateReply: (payload: { sessionId: string; prompt: string; role: string; contextMessages: Array<{ isSend: boolean; content: string; createTime: number }> }) =>
       ipcRenderer.invoke('ai:generateReply', payload)
+  },
+
+  // AI 分身
+  aiPersona: {
+    list: () => ipcRenderer.invoke('aiPersona:list'),
+    get: (id: string) => ipcRenderer.invoke('aiPersona:get', id),
+    getBySession: (sessionId: string) => ipcRenderer.invoke('aiPersona:getBySession', sessionId),
+    create: (payload: { sessionId: string; options: any }) => ipcRenderer.invoke('aiPersona:create', payload),
+    createSelf: (payload: { sessionIds: string[]; options: any }) => ipcRenderer.invoke('aiPersona:createSelf', payload),
+    update: (payload: { id: string; options: any }) => ipcRenderer.invoke('aiPersona:update', payload),
+    delete: (id: string) => ipcRenderer.invoke('aiPersona:delete', id),
+    updatePromptSkill: (payload: { id: string; promptSkill: string }) => ipcRenderer.invoke('aiPersona:updatePromptSkill', payload),
+    updateField: (payload: { id: string; field: string; value: unknown }) => ipcRenderer.invoke('aiPersona:updateField', payload),
+    getConversation: (personaId: string) => ipcRenderer.invoke('aiPersona:getConversation', personaId),
+    listKnowledge: (personaId: string) => ipcRenderer.invoke('aiPersona:listKnowledge', personaId),
+    updateKnowledgeItem: (payload: { personaId: string; itemId: string; patch: { title?: string; summary?: string; rawText?: string; tags?: string[]; status?: 'active' | 'pinned' | 'excluded'; importance?: number; confidence?: number } }) =>
+      ipcRenderer.invoke('aiPersona:updateKnowledgeItem', payload),
+    listAnswerTraces: (personaId: string) => ipcRenderer.invoke('aiPersona:listAnswerTraces', personaId),
+    chat: (payload: { personaId: string; message: string }) => ipcRenderer.invoke('aiPersona:chat', payload),
+    generateReply: (payload: { personaId: string; goal: string; contextMessages: Array<{ isSend: boolean; content: string; createTime: number }>; draftText?: string; toneOverride?: string }) =>
+      ipcRenderer.invoke('aiPersona:generateReply', payload)
   },
 
   social: {

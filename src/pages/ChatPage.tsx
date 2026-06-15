@@ -675,6 +675,25 @@ function cleanMessageContent(content: string): string {
   return content.trim()
 }
 
+function stripCopiedMessageMeta(content: string): string {
+  if (!content) return ''
+
+  const timePrefixPattern =
+    /^(?:\d{4}[-/.年]\d{1,2}[-/.月]\d{1,2}(?:\s+[0-2]?\d:\d{2}(?::\d{2})?)?|\d{1,2}:\d{2}(?::\d{2})?)\s+(?:[^\s:：]{1,50}[:：]\s*)?/
+
+  return content
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => {
+      const trimmed = line.trim()
+      if (!trimmed) return line
+      const stripped = trimmed.replace(timePrefixPattern, '')
+      return stripped || trimmed
+    })
+    .join('\n')
+    .trim()
+}
+
 const CHAT_SESSION_LIST_CACHE_TTL_MS = 24 * 60 * 60 * 1000
 const CHAT_SESSION_PREVIEW_CACHE_TTL_MS = 24 * 60 * 60 * 1000
 const CHAT_SESSION_PREVIEW_LIMIT_PER_SESSION = 30
@@ -1717,6 +1736,246 @@ function ChatPage(props: ChatPageProps) {
   // 编辑消息额外状态
   const [editMode, setEditMode] = useState<'raw' | 'fields'>('raw')
   const [tempFields, setTempFields] = useState<XmlField[]>([])
+
+  // AI 分身相关
+  const [showAiMenu, setShowAiMenu] = useState(false)
+  const [showPersonaGenerateModal, setShowPersonaGenerateModal] = useState(false)
+  const [personaDateRange, setPersonaDateRange] = useState<'all' | '1year' | '6months'>('1year')
+  const [personaGenerating, setPersonaGenerating] = useState(false)
+  const [personaGeneratePhase, setPersonaGeneratePhase] = useState<string>('')
+  const [personaGenerateError, setPersonaGenerateError] = useState<string | null>(null)
+  const [currentSessionPersonaId, setCurrentSessionPersonaId] = useState<string | null>(null)
+  const [showPersonaSuccess, setShowPersonaSuccess] = useState(false)
+  const [replyContextSource, setReplyContextSource] = useState<'current_chat' | 'persona'>('current_chat')
+  const [replyGoal, setReplyGoal] = useState<string>('reply')
+  const [showContextMenu, setShowContextMenu] = useState(false)
+  const [showGoalMenu, setShowGoalMenu] = useState(false)
+  const aiMenuRef = useRef<HTMLDivElement>(null)
+  const personaModalRef = useRef<HTMLDivElement>(null)
+  const contextMenuRef = useRef<HTMLDivElement>(null)
+  const goalMenuRef = useRef<HTMLDivElement>(null)
+
+  // 关闭 AI 菜单（点击外部）
+  useEffect(() => {
+    if (!showAiMenu) return
+    const handler = (e: MouseEvent) => {
+      if (aiMenuRef.current && !aiMenuRef.current.contains(e.target as Node)) {
+        setShowAiMenu(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showAiMenu])
+
+  // 关闭生成模态框
+  useEffect(() => {
+    if (!showPersonaGenerateModal) return
+    const handler = (e: MouseEvent) => {
+      if (personaModalRef.current && !personaModalRef.current.contains(e.target as Node)) {
+        setShowPersonaGenerateModal(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showPersonaGenerateModal])
+
+  // 关闭上下文菜单
+  useEffect(() => {
+    if (!showContextMenu) return
+    const handler = (e: MouseEvent) => {
+      if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
+        setShowContextMenu(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showContextMenu])
+
+  // 关闭目标菜单
+  useEffect(() => {
+    if (!showGoalMenu) return
+    const handler = (e: MouseEvent) => {
+      if (goalMenuRef.current && !goalMenuRef.current.contains(e.target as Node)) {
+        setShowGoalMenu(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showGoalMenu])
+
+  // 检查当前会话是否已有 AI 分身
+  useEffect(() => {
+    if (!currentSessionId) return
+    let cancelled = false
+    window.electronAPI.aiPersona.getBySession(currentSessionId).then(result => {
+      if (cancelled) return
+      if (result.success && result.data) {
+        setCurrentSessionPersonaId(result.data.id)
+        setReplyContextSource('current_chat')
+      } else {
+        setCurrentSessionPersonaId(null)
+      }
+    }).catch(() => {
+      if (!cancelled) setCurrentSessionPersonaId(null)
+    })
+    return () => { cancelled = true }
+  }, [currentSessionId, personaGenerating])
+
+  // 生成 AI 分身
+  const handleGeneratePersona = async () => {
+    if (!currentSessionId || personaGenerating) return
+    if (!window.electronAPI?.aiPersona?.create) {
+      setPersonaGenerateError('AI 分身功能不可用，请重启应用后再试')
+      return
+    }
+    setPersonaGenerating(true)
+    setPersonaGenerateError(null)
+    setPersonaGeneratePhase('正在连接数据库...')
+    try {
+      // 延迟一下让用户看到进度
+      await new Promise(r => setTimeout(r, 400))
+      setPersonaGeneratePhase('正在读取聊天记录...')
+      await new Promise(r => setTimeout(r, 400))
+      setPersonaGeneratePhase('正在调用 AI 模型分析...（消息越多耗时越长，请耐心等待）')
+      const result = await window.electronAPI.aiPersona.create({
+        sessionId: currentSessionId,
+        options: { dateRange: personaDateRange }
+      })
+      if (result.success) {
+        setPersonaGeneratePhase('生成完成！')
+        setCurrentSessionPersonaId(result.data!.id)
+        setShowPersonaSuccess(true)
+        await new Promise(r => setTimeout(r, 600))
+        setShowPersonaGenerateModal(false)
+        setTimeout(() => setShowPersonaSuccess(false), 3000)
+      } else {
+        setPersonaGenerateError(result.error || '生成失败')
+      }
+    } catch (e: any) {
+      console.error('生成 AI 分身失败:', e)
+      setPersonaGenerateError(e.message || '生成失败，请检查 AI 模型配置')
+    } finally {
+      setPersonaGenerating(false)
+      setPersonaGeneratePhase('')
+    }
+  }
+
+  // AI 回复生成（支持分身上下文）
+  const handleGenerateAiReply = async () => {
+    if (!currentSessionId) { setAiReplyError('无法获取当前会话信息'); return }
+    setAiReplyLoading(true)
+    setAiReplyError(null)
+
+    try {
+      let content: string
+
+      if (replyContextSource === 'persona' && currentSessionPersonaId) {
+        if (!window.electronAPI?.aiPersona?.generateReply) {
+          setAiReplyError('AI 分身功能不可用，请重启应用后再试')
+          return
+        }
+        const allMsgs = (messages || []).slice(-50)
+        const contextMsgs = allMsgs.map(m => ({
+          isSend: m.isSend === 1,
+          content: (m as any).parsedContent || (m as any).rawContent || '',
+          createTime: m.createTime
+        }))
+
+        const draftText = aiReplyContent || undefined
+        const result = await window.electronAPI.aiPersona.generateReply({
+          personaId: currentSessionPersonaId,
+          goal: replyGoal,
+          contextMessages: contextMsgs,
+          draftText,
+          toneOverride: undefined
+        })
+
+        if (result.success && result.data) {
+          content = result.data.content
+        } else {
+          setAiReplyError(result.error || '生成失败')
+          return
+        }
+      } else {
+        const configPrompt = aiReplyConfigLoaded ? aiReplyCustomPrompt : ''
+        const safeRoles = activeRoles || AI_ROLES
+        const active = safeRoles.find(r => r.id === aiReplyRole)
+        const prompt = active?.prompt || configPrompt || AI_ROLES[0].prompt
+
+        const allMsgs = (messages || []).slice(-50)
+        const contextMsgs = allMsgs.map(m => ({
+          isSend: m.isSend === 1,
+          content: (m as any).parsedContent || (m as any).rawContent || '',
+          createTime: m.createTime
+        }))
+
+        const r = await window.electronAPI.ai.generateReply({
+          sessionId: currentSessionId,
+          prompt,
+          role: aiReplyRole,
+          contextMessages: contextMsgs
+        })
+
+        if (r.success && r.data) {
+          content = r.data.content
+        } else {
+          setAiReplyError(r.error || '生成失败')
+          return
+        }
+      }
+
+      setAiReplyContent(content)
+    } catch (e: any) {
+      console.error('AI 生成回复失败:', e)
+      setAiReplyError(e.message || '生成异常，请检查 AI 模型配置')
+    } finally {
+      setAiReplyLoading(false)
+    }
+  }
+
+  // AI 回复 - 微调语气
+  const handleToneOverride = async (tone: string) => {
+    if (!aiReplyContent || !currentSessionId) return
+    setAiReplyLoading(true)
+    setAiReplyError(null)
+    try {
+      const allMsgs = (messages || []).slice(-50)
+      const contextMsgs = allMsgs.map(m => ({
+        isSend: m.isSend === 1,
+        content: (m as any).parsedContent || (m as any).rawContent || '',
+        createTime: m.createTime
+      }))
+
+      let result
+      if (replyContextSource === 'persona' && currentSessionPersonaId) {
+        result = await window.electronAPI.aiPersona.generateReply({
+          personaId: currentSessionPersonaId,
+          goal: 'rewrite_draft',
+          contextMessages: contextMsgs,
+          draftText: aiReplyContent,
+          toneOverride: tone
+        })
+      } else {
+        const configPrompt = aiReplyConfigLoaded ? aiReplyCustomPrompt : ''
+        const active = activeRoles.find(r => r.id === aiReplyRole)
+        const prompt = `请将以下内容改写得更${tone}一些：\n\n${aiReplyContent}`
+        result = await window.electronAPI.ai.generateReply({
+          sessionId: currentSessionId,
+          prompt,
+          role: aiReplyRole,
+          contextMessages: contextMsgs
+        })
+      }
+
+      if (result.success && result.data) {
+        setAiReplyContent(result.data.content)
+      }
+    } catch (e: any) {
+      setAiReplyError(e.message || '调整失败')
+    } finally {
+      setAiReplyLoading(false)
+    }
+  }
 
   // AI 生成回复
   const [aiReplyRole, setAiReplyRole] = useState('friendly')
@@ -3151,7 +3410,7 @@ function ChatPage(props: ChatPageProps) {
     const localType = msg.localType
     if (localType === 1) {
       // 文本消息
-      return cleanMessageContent(msg.parsedContent)
+      return stripCopiedMessageMeta(cleanMessageContent(msg.parsedContent)) || '[消息]'
     }
     if (localType === 3) return '[图片]'
     if (localType === 34) return '[语音]'
@@ -3170,7 +3429,7 @@ function ChatPage(props: ChatPageProps) {
         const lines: string[] = [`[聊天合集] ${title}`]
         for (const item of recordList) {
           const sender = item.sourcename ? `${item.sourcename}: ` : ''
-          const text = getChatRecordPreviewText(item)
+          const text = stripCopiedMessageMeta(getChatRecordPreviewText(item))
           lines.push(`${sender}${text}`)
         }
         return lines.join('\n')
@@ -3854,30 +4113,6 @@ function ChatPage(props: ChatPageProps) {
     else setAiReplyCustomPrompt('')
   }, [])
 
-  const handleGenerateAiReply = useCallback(async () => {
-    if (!currentSessionId) { setAiReplyError('无法获取当前会话信息'); return }
-    const configPrompt = aiReplyConfigLoaded ? aiReplyCustomPrompt : ''
-    const active = activeRoles.find(r => r.id === aiReplyRole)
-    const prompt = configPrompt || active?.prompt || '请根据聊天上下文生成一条合适的回复'
-    setAiReplyLoading(true); setAiReplyError(null); setAiReplyContent('')
-    try {
-      const r = await window.electronAPI.ai.generateReply({
-        sessionId: currentSessionId, prompt, role: active?.label || 'AI助手',
-        contextMessages: messages.map(m => ({
-          isSend: m.isSend === 1,
-          content: typeof m.content === 'string' ? m.content : '',
-          createTime: m.createTime
-        }))
-      })
-      if (r.success && r.data) setAiReplyContent(r.data.content)
-      else setAiReplyError(r.error || '生成失败')
-    } catch (e: any) {
-      setAiReplyError(e.message || '异常')
-    } finally {
-      setAiReplyLoading(false)
-    }
-  }, [currentSessionId, aiReplyRole, aiReplyCustomPrompt, messages])
-
   const handleCopyAndOpenWechat = useCallback(() => {
     if (!aiReplyContent) return
     const ta = document.createElement('textarea')
@@ -3890,6 +4125,48 @@ function ChatPage(props: ChatPageProps) {
     setTimeout(() => setAiReplyCopied(false), 2000)
     try { window.open('weixin://', '_blank') } catch { /* ignore */ }
   }, [aiReplyContent])
+
+  const [wechatSending, setWechatSending] = useState(false)
+
+  const handleSendToWechat = useCallback(async () => {
+    if (!aiReplyContent || !currentSessionId) return
+    const targetCandidates = Array.from(new Set([
+      String(sessionDetail?.remark || '').trim(),
+      String(sessionDetail?.nickName || '').trim(),
+      String(sessionDetail?.alias || '').trim(),
+      String(currentSessionId || '').trim()
+    ].filter(Boolean)))
+
+    if (!window.electronAPI?.wechatRpa?.sendReply) {
+      await handleCopyAndOpenWechat()
+      return
+    }
+
+    setWechatSending(true)
+    setAiReplyError(null)
+    try {
+      const result = await window.electronAPI.wechatRpa.sendReply({
+        targetCandidates,
+        message: aiReplyContent,
+        autoSend: true,
+        launchIfNeeded: true
+      })
+
+      if (!result.success) {
+        setAiReplyError(result.error || '发送到微信失败')
+        await handleCopyAndOpenWechat()
+        return
+      }
+
+      setAiReplyCopied(true)
+      setTimeout(() => setAiReplyCopied(false), 1500)
+    } catch (e: any) {
+      setAiReplyError(e?.message || '发送到微信失败')
+      await handleCopyAndOpenWechat()
+    } finally {
+      setWechatSending(false)
+    }
+  }, [aiReplyContent, currentSessionId, sessionDetail?.alias, sessionDetail?.nickName, sessionDetail?.remark, handleCopyAndOpenWechat])
 
   // 加载消息
   const loadMessages = async (
@@ -7797,15 +8074,48 @@ function ChatPage(props: ChatPageProps) {
                 )}
                 {!standaloneSessionWindow && (
                   <>
-                    <button className="icon-btn" onClick={handleInsightAnalysis} disabled={!currentSessionId} title="洞察分析">
-                      <BarChart3 size={18} />
-                    </button>
-                    <button className="icon-btn" onClick={handlePersonaAnalysis} disabled={!currentSessionId || isCurrentSessionGroup} title={isCurrentSessionGroup ? '人物画像仅支持私聊' : '人物画像'}>
-                      <Bot size={18} />
-                    </button>
-                    <button className="icon-btn" onClick={handleTopicsAnalysis} disabled={!currentSessionId} title="话题分析">
-                      <Hash size={18} />
-                    </button>
+                    {/* AI 操作下拉菜单 */}
+                    <div className="ai-menu-wrapper" ref={aiMenuRef}>
+                      <button
+                        className={`icon-btn ai-menu-btn ${showAiMenu ? 'active' : ''}`}
+                        onClick={() => setShowAiMenu(!showAiMenu)}
+                        disabled={!currentSessionId}
+                        title="AI 操作"
+                      >
+                        <Bot size={18} />
+                        <ChevronDown size={12} className="ai-menu-caret" />
+                      </button>
+                      {showAiMenu && (
+                        <div className="ai-menu-dropdown">
+                          <button className="ai-menu-item" onClick={() => { setShowAiMenu(false); handleInsightAnalysis() }}>
+                            <BarChart3 size={16} /><span>AI 分析</span>
+                          </button>
+                          <button
+                            className="ai-menu-item ai-menu-item-highlight"
+                            onClick={() => { setShowAiMenu(false); setShowPersonaGenerateModal(true) }}
+                            disabled={isCurrentSessionGroup}
+                            title={isCurrentSessionGroup ? '仅支持私聊联系人' : undefined}
+                          >
+                            <Bot size={16} /><span>生成 AI 分身</span>
+                            {currentSessionPersonaId && <span className="ai-menu-badge">已有</span>}
+                          </button>
+                          <button className="ai-menu-item" onClick={() => { setShowAiMenu(false); handlePersonaAnalysis() }} disabled={isCurrentSessionGroup}>
+                            <FileText size={16} /><span>人物画像</span>
+                          </button>
+                          <button className="ai-menu-item" onClick={() => { setShowAiMenu(false); handleTopicsAnalysis() }}>
+                            <Hash size={16} /><span>话题分析</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    {personaGenerating && (
+                      <span className="persona-generating-hint" title="AI 分身生成中">
+                        <Loader2 size={16} className="spin" />
+                      </span>
+                    )}
+                    {showPersonaSuccess && (
+                      <span className="persona-success-hint">分身已生成</span>
+                    )}
                   </>
                 )}
                 {!standaloneSessionWindow && isCurrentSessionPrivateSnsSupported && (
@@ -8431,34 +8741,129 @@ function ChatPage(props: ChatPageProps) {
               )}
             </div>
 
-            {/* AI 生成回复栏 */}
+            {/* AI 生成回复栏 - 回复助手 */}
             {!standaloneSessionWindow && (
               <div className="ai-reply-bar">
                 <div className="ai-reply-bar-top">
-                  <div className="ai-reply-bar-title"><Bot size={16} /><span>AI 生成回复</span></div>
-                  <div className="ai-reply-role-section">
-                    <span className="ai-reply-label">角色：</span>
-                    <div className="ai-reply-role-selector" onClick={() => setShowRoleSelector(!showRoleSelector)}>
-                      <span className="ai-reply-role-current">{selectedRole?.icon} {selectedRole?.label}</span>
-                      <ChevronDown size={14} />
-                    </div>
-                    {showRoleSelector && (
-                      <div className="ai-reply-role-dropdown">
-                        {activeRoles.map(role => (
-                          <button key={role.id} className={`ai-reply-role-option ${aiReplyRole === role.id ? 'active' : ''}`} onClick={() => handleAiReplyRoleSelect(role.id)}>
-                            <span>{role.icon}</span><span>{role.label}</span>
+                  <div className="ai-reply-bar-title"><Bot size={16} /><span>回复助手</span></div>
+                  <div className="ai-reply-bar-top-right">
+                    {/* 回复依据选择器 */}
+                    <div className="ai-reply-context-section" ref={contextMenuRef}>
+                      <span className="ai-reply-label">依据：</span>
+                      <div className="ai-reply-context-selector" onClick={() => { setShowContextMenu(!showContextMenu); setShowGoalMenu(false) }}>
+                        <span className="ai-reply-context-current">
+                          {replyContextSource === 'persona' ? 'TA 的 AI 分身' : '当前聊天上下文'}
+                        </span>
+                        <ChevronDown size={12} />
+                      </div>
+                      {showContextMenu && (
+                        <div className="ai-reply-context-dropdown">
+                          <button
+                            className={`ai-reply-context-option ${replyContextSource === 'current_chat' ? 'active' : ''}`}
+                            onClick={() => { setReplyContextSource('current_chat'); setReplyGoal('reply'); setShowContextMenu(false) }}
+                          >
+                            当前聊天上下文
                           </button>
-                        ))}
+                          {currentSessionPersonaId ? (
+                            <button
+                              className={`ai-reply-context-option ${replyContextSource === 'persona' ? 'active' : ''}`}
+                              onClick={() => { setReplyContextSource('persona'); setReplyGoal('predict_reaction'); setShowContextMenu(false) }}
+                            >
+                              TA 的 AI 分身
+                            </button>
+                          ) : (
+                            <button
+                              className="ai-reply-context-option ai-reply-context-disabled"
+                              onClick={() => { setShowContextMenu(false); setShowPersonaGenerateModal(true) }}
+                            >
+                              生成 TA 的 AI 分身...
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    {/* 目标选择器（分身模式） */}
+                    {replyContextSource === 'persona' && currentSessionPersonaId && (
+                      <div className="ai-reply-goal-section" ref={goalMenuRef}>
+                        <span className="ai-reply-label">目标：</span>
+                        <div className="ai-reply-goal-selector" onClick={() => { setShowGoalMenu(!showGoalMenu); setShowContextMenu(false) }}>
+                          <span className="ai-reply-goal-current">
+                            {replyGoal === 'predict_reaction' ? '预测 TA 的反应' :
+                             replyGoal === 'rewrite_draft' ? '用 TA 的语言风格改写' :
+                             replyGoal === 'interpret' ? '解读对方意思' :
+                             replyGoal === 'risk_check' ? '检查是否合适' : '自然回复'}
+                          </span>
+                          <ChevronDown size={12} />
+                        </div>
+                        {showGoalMenu && (
+                          <div className="ai-reply-context-dropdown">
+                            <button
+                              className={`ai-reply-context-option ${replyGoal === 'predict_reaction' ? 'active' : ''}`}
+                              onClick={() => { setReplyGoal('predict_reaction'); setShowGoalMenu(false) }}
+                            >
+                              预测 TA 的反应
+                            </button>
+                            <button
+                              className={`ai-reply-context-option ${replyGoal === 'rewrite_draft' ? 'active' : ''}`}
+                              onClick={() => { setReplyGoal('rewrite_draft'); setShowGoalMenu(false) }}
+                            >
+                              用 TA 的语言风格改写
+                            </button>
+                            <button
+                              className={`ai-reply-context-option ${replyGoal === 'interpret' ? 'active' : ''}`}
+                              onClick={() => { setReplyGoal('interpret'); setShowGoalMenu(false) }}
+                            >
+                              解读对方意思
+                            </button>
+                            <button
+                              className={`ai-reply-context-option ${replyGoal === 'risk_check' ? 'active' : ''}`}
+                              onClick={() => { setReplyGoal('risk_check'); setShowGoalMenu(false) }}
+                            >
+                              检查是否合适
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {/* 角色选择器（上下文模式） */}
+                    {replyContextSource === 'current_chat' && (
+                      <div className="ai-reply-role-section">
+                        <span className="ai-reply-label">角色：</span>
+                        <div className="ai-reply-role-selector" onClick={() => setShowRoleSelector(!showRoleSelector)}>
+                          <span className="ai-reply-role-current">{selectedRole?.icon} {selectedRole?.label}</span>
+                          <ChevronDown size={14} />
+                        </div>
+                        {showRoleSelector && (
+                          <div className="ai-reply-role-dropdown">
+                            {activeRoles.map(role => (
+                              <button key={role.id} className={`ai-reply-role-option ${aiReplyRole === role.id ? 'active' : ''}`} onClick={() => handleAiReplyRoleSelect(role.id)}>
+                                <span>{role.icon}</span><span>{role.label}</span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
                 </div>
+                {aiReplyContent && !aiReplyLoading && (
+                  <div className="ai-reply-tone-buttons" aria-label="回复语气快捷调整">
+                    <button className="ai-reply-tone-btn" onClick={() => handleToneOverride('更短')} title="更短">更短</button>
+                    <button className="ai-reply-tone-btn" onClick={() => handleToneOverride('更自然')} title="更自然">更自然</button>
+                    <button className="ai-reply-tone-btn" onClick={() => handleToneOverride('更礼貌')} title="更礼貌">更礼貌</button>
+                    <button className="ai-reply-tone-btn" onClick={() => handleToneOverride('更直接')} title="更直接">更直接</button>
+                  </div>
+                )}
                 <div className="ai-reply-bar-bottom">
                   <textarea
                     className="ai-reply-result-textarea"
                     value={aiReplyContent}
                     onChange={e => setAiReplyContent(e.target.value)}
-                    placeholder="点击右侧按钮生成 AI 回复..."
+                    placeholder={
+                      replyContextSource === 'persona'
+                        ? '选择目标后点击生成按钮...'
+                        : '点击右侧按钮生成 AI 回复...'
+                    }
                     rows={4}
                   />
                   <div className="ai-reply-bar-actions">
@@ -8466,12 +8871,15 @@ function ChatPage(props: ChatPageProps) {
                       {aiReplyLoading ? <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> : aiReplyContent ? <RefreshCw size={16} /> : <Send size={16} />}
                       <span>{aiReplyLoading ? '生成中...' : aiReplyContent ? '重新生成' : '生成回复'}</span>
                     </button>
-                    <button className="ai-reply-copy-wechat-btn" onClick={handleCopyAndOpenWechat} disabled={!aiReplyContent}>
-                      {aiReplyCopied ? <Check size={16} /> : <Copy size={16} />}
-                      <span>{aiReplyCopied ? '已复制' : '复制并弹出微信'}</span>
+                    <button className="ai-reply-copy-wechat-btn" onClick={handleSendToWechat} disabled={!aiReplyContent || wechatSending}>
+                      {wechatSending ? <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <Send size={16} />}
+                      <span>{wechatSending ? '发送中...' : '发送到微信'}</span>
                     </button>
                   </div>
                   {aiReplyError && <div className="ai-reply-error"><AlertCircle size={14} /><span>{aiReplyError}</span></div>}
+                  {personaGenerateError && (
+                    <div className="ai-reply-error"><AlertCircle size={14} /><span>{personaGenerateError}</span></div>
+                  )}
                 </div>
               </div>
             )}
@@ -8484,6 +8892,74 @@ function ChatPage(props: ChatPageProps) {
           </div>
         )}
       </div>
+
+      {/* AI 分身生成弹窗 */}
+      {showPersonaGenerateModal && createPortal(
+        <div className="persona-modal-overlay" onClick={() => setShowPersonaGenerateModal(false)}>
+          <div className="persona-modal" ref={personaModalRef} onClick={e => e.stopPropagation()}>
+            <div className="persona-modal-header">
+              <h3>生成 AI 分身</h3>
+              <button className="persona-modal-close" onClick={() => setShowPersonaGenerateModal(false)}>
+                <X size={18} />
+              </button>
+            </div>
+            <div className="persona-modal-body">
+              <p className="persona-modal-desc">
+                基于当前联系人的聊天记录，生成一份结构化的人格档案。
+                生成后可在「AI 分身库」中查看和对话。
+              </p>
+              <div className="persona-modal-warning">
+                <AlertCircle size={14} />
+                <span>AI 分身基于历史聊天记录生成，只用于沟通演练和关系理解，不代表本人真实想法。</span>
+              </div>
+              <div className="persona-modal-options">
+                <label className="persona-modal-label">聊天记录范围：</label>
+                <div className="persona-date-range-options">
+                  {([
+                    ['all', '全部聊天记录'],
+                    ['1year', '最近 1 年'],
+                    ['6months', '最近 6 个月']
+                  ] as const).map(([value, label]) => (
+                    <button
+                      key={value}
+                      className={`persona-date-option ${personaDateRange === value ? 'active' : ''}`}
+                      onClick={() => setPersonaDateRange(value)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {personaGenerating && (
+                <div className="persona-modal-progress">
+                  <div className="persona-modal-progress-bar">
+                    <div className="persona-modal-progress-fill" />
+                  </div>
+                  <div className="persona-modal-progress-text">
+                    <Loader2 size={14} className="spin" />
+                    <span>{personaGeneratePhase || '生成中...'}</span>
+                  </div>
+                </div>
+              )}
+              {personaGenerateError && (
+                <div className="persona-modal-error">
+                  <AlertCircle size={14} />
+                  <span>{personaGenerateError}</span>
+                </div>
+              )}
+            </div>
+            <div className="persona-modal-footer">
+              <button className="persona-modal-cancel" onClick={() => { setShowPersonaGenerateModal(false); setPersonaGenerateError(null) }} disabled={personaGenerating}>
+                {personaGenerating ? '请稍候' : '取消'}
+              </button>
+              <button className="persona-modal-confirm" onClick={handleGeneratePersona} disabled={personaGenerating}>
+                {personaGenerating ? <><Loader2 size={16} className="spin" /> 生成中...</> : '开始生成'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
 
       {/* 语音转文字模型下载弹窗 */}
       {showVoiceTranscribeDialog && (

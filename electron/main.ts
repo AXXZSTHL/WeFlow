@@ -26,12 +26,14 @@ import { snsService, isVideoUrl } from './services/snsService'
 import { windowsHelloService } from './services/windowsHelloService'
 import { exportCardDiagnosticsService } from './services/exportCardDiagnosticsService'
 import { cloudControlService } from './services/cloudControlService'
+import { wechatRpaService } from './services/wechatRpaService'
 
 import { destroyNotificationWindow, registerNotificationHandlers, showNotification, setNotificationNavigateHandler } from './windows/notificationWindow'
 import { httpService } from './services/httpService'
 import { messagePushService } from './services/messagePushService'
 import { insightService } from './services/insightService'
 import { aiService } from './services/aiService'
+import { aiPersonaService } from './services/aiPersonaService'
 import { normalizeWeiboCookieInput, weiboService } from './services/social/weiboService'
 import { bizService } from './services/bizService'
 import { backupService } from './services/backupService'
@@ -1765,6 +1767,27 @@ function registerIpcHandlers() {
     contextMessages: Array<{ isSend: boolean; content: string; createTime: number }>
   }) => { return aiService.generateReply(payload) })
 
+  // AI 分身
+  ipcMain.handle('aiPersona:list', async () => { return aiPersonaService.listPersonas() })
+  ipcMain.handle('aiPersona:get', async (_, id: string) => { return aiPersonaService.getPersona(id) })
+  ipcMain.handle('aiPersona:getBySession', async (_, sessionId: string) => { return aiPersonaService.getPersonaBySession(sessionId) })
+  ipcMain.handle('aiPersona:create', async (_, payload: { sessionId: string; options: any }) => { return aiPersonaService.createPersona(payload.sessionId, payload.options) })
+  ipcMain.handle('aiPersona:createSelf', async (_, payload: { sessionIds: string[]; options: any }) => { return aiPersonaService.createSelfPersona({ sessionIds: payload.sessionIds, ...payload.options }) })
+  ipcMain.handle('aiPersona:update', async (_, payload: { id: string; options: any }) => { return aiPersonaService.updatePersona(payload.id, payload.options) })
+  ipcMain.handle('aiPersona:delete', async (_, id: string) => { return aiPersonaService.deletePersona(id) })
+  ipcMain.handle('aiPersona:updatePromptSkill', async (_, payload: { id: string; promptSkill: string }) => { return aiPersonaService.updatePromptSkill(payload.id, payload.promptSkill) })
+  ipcMain.handle('aiPersona:updateField', async (_, payload: { id: string; field: string; value: unknown }) => { return aiPersonaService.updatePersonaField(payload.id, payload.field, payload.value) })
+  ipcMain.handle('aiPersona:getConversation', async (_, personaId: string) => { return aiPersonaService.getConversation(personaId) })
+  ipcMain.handle('aiPersona:listKnowledge', async (_, personaId: string) => { return aiPersonaService.listKnowledge(personaId) })
+  ipcMain.handle('aiPersona:updateKnowledgeItem', async (_, payload: { personaId: string; itemId: string; patch: { title?: string; summary?: string; rawText?: string; tags?: string[]; status?: 'active' | 'pinned' | 'excluded'; importance?: number; confidence?: number } }) => {
+    return aiPersonaService.updateKnowledgeItem(payload.personaId, payload.itemId, payload.patch)
+  })
+  ipcMain.handle('aiPersona:listAnswerTraces', async (_, personaId: string) => { return aiPersonaService.listAnswerTraces(personaId) })
+  ipcMain.handle('aiPersona:chat', async (_, payload: { personaId: string; message: string }) => { return aiPersonaService.chatWithPersona(payload.personaId, payload.message) })
+  ipcMain.handle('aiPersona:generateReply', async (_, payload: {
+    personaId: string; goal: string; contextMessages: Array<{ isSend: boolean; content: string; createTime: number }>; draftText?: string; toneOverride?: string
+  }) => { return aiPersonaService.generateReplyWithPersona(payload.personaId, payload.goal, payload.contextMessages, payload.draftText, payload.toneOverride) })
+
   ipcMain.handle('social:saveWeiboCookie', async (_, rawInput: string) => {
     try {
       if (!configService) {
@@ -2104,6 +2127,10 @@ function registerIpcHandlers() {
     pruneChatHistoryPayloadStore()
     createChatHistoryPayloadWindow(payloadId)
     return true
+  })
+
+  ipcMain.handle('wechatRpa:sendReply', async (_, payload: { targetCandidates: string[]; message: string; autoSend?: boolean; launchIfNeeded?: boolean }) => {
+    return wechatRpaService.sendReply(payload)
   })
 
   ipcMain.handle('window:getChatHistoryPayload', (_, payloadId: string) => {

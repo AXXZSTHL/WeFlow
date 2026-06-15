@@ -30,6 +30,8 @@ import ResourcesPage from './pages/ResourcesPage'
 import ChatHistoryPage from './pages/ChatHistoryPage'
 import NotificationWindow from './pages/NotificationWindow'
 import AccountManagementPage from './pages/AccountManagementPage'
+import AiPersonaLibraryPage from './pages/AiPersonaLibraryPage'
+import AiPersonaDetailPage from './pages/AiPersonaDetailPage'
 import BackupPage from './pages/BackupPage'
 
 import { useAppStore } from './stores/appStore'
@@ -701,6 +703,8 @@ function App() {
               <Route path="/insight" element={<ChatInsightPage />} />
               <Route path="/persona" element={<ChatPersonaPage />} />
               <Route path="/topics" element={<ChatTopicsPage />} />
+              <Route path="/ai-persona" element={<AiPersonaLibraryPage />} />
+              <Route path="/ai-persona/:id" element={<AiPersonaDetailPage />} />
               <Route path="/annual-report" element={<AnnualReportPage />} />
               <Route path="/annual-report/view" element={<AnnualReportWindow />} />
               <Route path="/dual-report" element={<DualReportPage />} />
