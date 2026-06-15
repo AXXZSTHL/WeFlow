@@ -287,6 +287,217 @@ function normalizeChatRecordText(value?: string): string {
     .trim()
 }
 
+function decodeChatRecordXmlEntities(value: string): string {
+  return String(value || '')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+}
+
+function extractChatRecordXmlValue(xml: string, tagName: string): string {
+  const source = String(xml || '')
+  if (!source) return ''
+  const regex = new RegExp(`<${tagName}\\b[^>]*>([\\s\\S]*?)<\\/${tagName}>`, 'i')
+  const match = regex.exec(source)
+  if (!match?.[1]) return ''
+  return decodeChatRecordXmlEntities(match[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')).trim()
+}
+
+function extractTopLevelChatRecordXmlElements(source: string, tagName: string): Array<{ attrs: string; inner: string }> {
+  const xml = String(source || '')
+  if (!xml) return []
+
+  const pattern = new RegExp(`<(/?)${tagName}\\b([^>]*)>`, 'gi')
+  const result: Array<{ attrs: string; inner: string }> = []
+  let match: RegExpExecArray | null
+  let depth = 0
+  let openEnd = -1
+  let openAttrs = ''
+
+  while ((match = pattern.exec(xml)) !== null) {
+    const isClosing = match[1] === '/'
+    const attrs = match[2] || ''
+    const rawTag = match[0] || ''
+    const selfClosing = !isClosing && /\/\s*>$/.test(rawTag)
+
+    if (!isClosing) {
+      if (depth === 0) {
+        openEnd = pattern.lastIndex
+        openAttrs = attrs
+      }
+      if (!selfClosing) {
+        depth += 1
+      } else if (depth === 0 && openEnd >= 0) {
+        result.push({ attrs: openAttrs, inner: '' })
+        openEnd = -1
+        openAttrs = ''
+      }
+      continue
+    }
+
+    if (depth <= 0) continue
+    depth -= 1
+    if (depth === 0 && openEnd >= 0) {
+      result.push({
+        attrs: openAttrs,
+        inner: xml.slice(openEnd, match.index)
+      })
+      openEnd = -1
+      openAttrs = ''
+    }
+  }
+
+  return result
+}
+
+function parseCopiedChatRecordDataItem(itemXml: string, attrs: string): ChatRecordItem | null {
+  const datatypeMatch = /datatype\s*=\s*["']?(\d+)["']?/i.exec(attrs || '')
+  const datatype = datatypeMatch ? Number.parseInt(datatypeMatch[1], 10) : Number.parseInt(extractChatRecordXmlValue(itemXml, 'datatype') || '0', 10)
+  const sourcename = decodeChatRecordXmlEntities(extractChatRecordXmlValue(itemXml, 'sourcename'))
+  const sourcetime = extractChatRecordXmlValue(itemXml, 'sourcetime')
+  const sourceheadurl = extractChatRecordXmlValue(itemXml, 'sourceheadurl') || undefined
+  const datadesc = decodeChatRecordXmlEntities(
+    extractChatRecordXmlValue(itemXml, 'datadesc') ||
+    extractChatRecordXmlValue(itemXml, 'content') ||
+    ''
+  ) || undefined
+  const datatitle = decodeChatRecordXmlEntities(extractChatRecordXmlValue(itemXml, 'datatitle') || '') || undefined
+  const nestedRecordXml = extractChatRecordXmlValue(itemXml, 'recordxml') || undefined
+  const chatRecordTitle = decodeChatRecordXmlEntities(
+    (nestedRecordXml && extractChatRecordXmlValue(nestedRecordXml, 'title')) ||
+    datatitle ||
+    ''
+  ) || undefined
+  const chatRecordDesc = decodeChatRecordXmlEntities(
+    (nestedRecordXml && extractChatRecordXmlValue(nestedRecordXml, 'desc')) ||
+    datadesc ||
+    ''
+  ) || undefined
+  const chatRecordList =
+    datatype === 17 && nestedRecordXml
+      ? parseCopiedChatRecordContainer(nestedRecordXml)
+      : undefined
+
+  if (!(datatype || sourcename || datadesc || datatitle || chatRecordTitle || chatRecordDesc)) return null
+
+  return {
+    datatype: Number.isFinite(datatype) ? datatype : 0,
+    sourcename,
+    sourcetime,
+    sourceheadurl,
+    datadesc,
+    datatitle,
+    chatRecordTitle,
+    chatRecordDesc,
+    chatRecordList
+  } as ChatRecordItem
+}
+
+function parseCopiedChatRecordContainer(containerXml: string): ChatRecordItem[] {
+  const source = String(containerXml || '')
+  if (!source) return []
+
+  const segments: string[] = [source]
+  const decodedContainer = decodeChatRecordXmlEntities(source)
+  if (decodedContainer !== source) {
+    segments.push(decodedContainer)
+  }
+
+  const cdataRegex = /<!\[CDATA\[([\s\S]*?)\]\]>/g
+  let cdataMatch: RegExpExecArray | null
+  while ((cdataMatch = cdataRegex.exec(source)) !== null) {
+    const cdataInner = cdataMatch[1] || ''
+    if (!cdataInner) continue
+    segments.push(cdataInner)
+    const decodedInner = decodeChatRecordXmlEntities(cdataInner)
+    if (decodedInner !== cdataInner) {
+      segments.push(decodedInner)
+    }
+  }
+
+  const items: ChatRecordItem[] = []
+  const seen = new Set<string>()
+  for (const segment of segments) {
+    if (!segment) continue
+    const dataItems = extractTopLevelChatRecordXmlElements(segment, 'dataitem')
+    for (const dataItem of dataItems) {
+      const parsed = parseCopiedChatRecordDataItem(dataItem.inner || '', dataItem.attrs || '')
+      if (!parsed) continue
+      const key = `${parsed.datatype}|${parsed.sourcename}|${parsed.sourcetime}|${parsed.datadesc || ''}|${parsed.datatitle || ''}|${parsed.chatRecordTitle || ''}|${parsed.chatRecordDesc || ''}`
+      if (!seen.has(key)) {
+        seen.add(key)
+        items.push(parsed)
+      }
+    }
+  }
+
+  if (items.length > 0) return items
+  const fallback = parseCopiedChatRecordDataItem(source, '')
+  return fallback ? [fallback] : []
+}
+
+interface ChatRecordCopyEntry {
+  sender: string
+  text: string
+  imageDataUrl?: string
+  imageMime?: string
+}
+
+function escapeHtml(value: string): string {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+function buildChatRecordCopyHtml(entries: ChatRecordCopyEntry[]): string {
+  const blocks = entries.map((entry) => {
+    const senderHtml = entry.sender ? `<strong class="sender">${escapeHtml(entry.sender)}</strong>` : ''
+    const textHtml = entry.text ? `<div class="text">${escapeHtml(entry.text).replace(/\n/g, '<br>')}</div>` : ''
+    const imageHtml = entry.imageDataUrl
+      ? `<div class="image"><img src="${entry.imageDataUrl}" alt="图片" /></div>`
+      : ''
+    return `<div class="chat-record-copy-line">${senderHtml}${textHtml}${imageHtml}</div>`
+  }).join('')
+
+  return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Microsoft YaHei", sans-serif; }
+  .chat-record-copy-line { margin: 0 0 10px; white-space: pre-wrap; }
+  .sender { display: inline-block; margin-right: 6px; color: #576b95; font-weight: 600; }
+  .text { display: inline; white-space: pre-wrap; word-break: break-word; }
+  .image { margin-top: 4px; }
+  .image img { max-width: 420px; height: auto; display: block; border-radius: 6px; }
+</style>
+</head>
+<body>${blocks}</body>
+</html>`
+}
+
+function resolveCopiedChatRecordList(msg: Message): ChatRecordItem[] {
+  const direct = Array.isArray(msg.chatRecordList) ? msg.chatRecordList : []
+  if (direct.length > 0) return direct
+
+  const rawSource = String((msg as any).rawContent || (msg as any).content || msg.parsedContent || '')
+  if (!rawSource) return []
+
+  const xmlType = String((msg as any).xmlType || '')
+  const appMsgType = String((msg as any).appMsgType || '')
+  if (xmlType !== '19' && appMsgType !== '19' && !rawSource.includes('<recorditem') && !rawSource.includes('<dataitem')) {
+    return []
+  }
+
+  return parseCopiedChatRecordContainer(rawSource)
+}
+
 function hasRenderableChatRecordName(value?: string): boolean {
   return value !== undefined && value !== null && String(value).length > 0
 }
@@ -316,6 +527,64 @@ function getChatRecordPreviewText(item: ChatRecordItem): string {
   if (item.datatype === 34) return '[语音]'
   if (item.datatype === 47) return '[表情]'
   return text || '[媒体消息]'
+}
+
+function flattenChatRecordCopyLines(recordList: ChatRecordItem[]): string[] {
+  const lines: string[] = []
+
+  const getItemCopyText = (item: ChatRecordItem): string => {
+    const candidates = [
+      item.datadesc,
+      item.datatitle,
+      item.chatRecordDesc,
+      item.chatRecordTitle
+    ]
+
+    for (const candidate of candidates) {
+      const text = stripCopiedMessageMeta(normalizeChatRecordText(candidate))
+      if (text) return text
+    }
+
+    if (item.datatype === 2 || item.datatype === 3) return '[图片]'
+    if (item.datatype === 43) return '[视频]'
+    if (item.datatype === 34) return '[语音]'
+    if (item.datatype === 47) return '[表情]'
+    if (item.datatype === 49) return '[链接]'
+    if (item.datatype === 8) return '[文件]'
+    if (item.datatype === 17) return ''
+    return ''
+  }
+
+  const visit = (items: ChatRecordItem[]) => {
+    for (const item of items) {
+      if (!item) continue
+
+      if (item.datatype === 17 && Array.isArray(item.chatRecordList) && item.chatRecordList.length > 0) {
+        visit(item.chatRecordList as ChatRecordItem[])
+        continue
+      }
+
+      const sender = normalizeChatRecordText(item.sourcename)
+      const content = getItemCopyText(item)
+      const text = content || ''
+      if (sender && text) {
+        lines.push(`${sender}: ${text}`)
+      } else if (text) {
+        lines.push(text)
+      }
+    }
+  }
+
+  visit(recordList)
+  if (lines.length === 0) {
+    for (const item of recordList) {
+      const nested = Array.isArray(item?.chatRecordList) ? flattenChatRecordCopyLines(item.chatRecordList as ChatRecordItem[]) : []
+      if (nested.length > 0) {
+        lines.push(...nested)
+      }
+    }
+  }
+  return lines
 }
 
 function buildChatRecordPreviewItems(recordList: ChatRecordItem[], maxVisible = 3): ChatRecordItem[] {
@@ -3405,9 +3674,153 @@ function ChatPage(props: ChatPageProps) {
     }
   }, [])
 
+  const resolveChatRecordImageDataUrl = useCallback(async (item: ChatRecordItem): Promise<{ dataUrl?: string; mime?: string }> => {
+    const md5s = [item.thumbfullmd5, item.fullmd5, item.md5].filter(Boolean) as string[]
+    const createTime = Number(item.sourcetime) || 0
+    for (const md5 of md5s) {
+      try {
+        const base64Result = await window.electronAPI.image.resolveAsBase64({
+          imageMd5: md5,
+          sessionId: currentSessionId || undefined,
+          srcMsgLocalid: item.srcMsgLocalid || undefined,
+          createTime: createTime || undefined
+        })
+        if (base64Result.success && base64Result.base64) {
+          const mime = base64Result.mime || 'image/jpeg'
+          return {
+            dataUrl: `data:${mime};base64,${base64Result.base64}`,
+            mime
+          }
+        }
+      } catch {
+        // continue
+      }
+
+      try {
+        const cacheResult = await window.electronAPI.image.resolveCache({
+          imageMd5: md5,
+          sessionId: currentSessionId || undefined,
+          createTime: createTime || undefined
+        })
+        if (cacheResult.success && cacheResult.localPath && cacheResult.localPath.startsWith('data:')) {
+          const mimeMatch = /^data:([^;]+);base64,/i.exec(cacheResult.localPath)
+          return {
+            dataUrl: cacheResult.localPath,
+            mime: mimeMatch?.[1] || 'image/jpeg'
+          }
+        }
+      } catch {
+        // continue
+      }
+    }
+    return {}
+  }, [currentSessionId])
+
+  const buildChatRecordCopyEntries = useCallback(async (recordList: ChatRecordItem[]): Promise<ChatRecordCopyEntry[]> => {
+    const entries: ChatRecordCopyEntry[] = []
+
+    const visit = async (items: ChatRecordItem[]) => {
+      for (const item of items) {
+        if (!item) continue
+
+        if (item.datatype === 17 && Array.isArray(item.chatRecordList) && item.chatRecordList.length > 0) {
+          await visit(item.chatRecordList as ChatRecordItem[])
+          continue
+        }
+
+        const sender = normalizeChatRecordText(item.sourcename)
+        let text = stripCopiedMessageMeta(normalizeChatRecordText(item.datadesc || item.datatitle || item.chatRecordDesc || item.chatRecordTitle))
+        let imageDataUrl: string | undefined
+        let imageMime: string | undefined
+
+        if (item.datatype === 2 || item.datatype === 3) {
+          text = text || '[图片]'
+          const resolved = await resolveChatRecordImageDataUrl(item)
+          imageDataUrl = resolved.dataUrl
+          imageMime = resolved.mime
+        } else if (!text) {
+          text = stripCopiedMessageMeta(normalizeChatRecordText(getChatRecordPreviewText(item)))
+        }
+
+        if (!text && !imageDataUrl) continue
+        entries.push({ sender, text, imageDataUrl, imageMime })
+      }
+    }
+
+    await visit(recordList)
+    return entries
+  }, [resolveChatRecordImageDataUrl])
+
+  const copyClipboardRichContent = useCallback(async (text: string, html: string) => {
+    const clipboardItemCtor = (window as any).ClipboardItem
+    if (typeof clipboardItemCtor === 'function' && navigator.clipboard?.write) {
+      const item = new clipboardItemCtor({
+        'text/plain': new Blob([text], { type: 'text/plain;charset=utf-8' }),
+        'text/html': new Blob([html], { type: 'text/html;charset=utf-8' })
+      })
+      await navigator.clipboard.write([item])
+      return
+    }
+    await navigator.clipboard.writeText(text)
+  }, [])
+
+  const copyChatRecordMessage = useCallback(async (msg: Message, messageKey: string) => {
+    const recordList = resolveCopiedChatRecordList(msg)
+    const entries = await buildChatRecordCopyEntries(recordList)
+    const text = entries.map((entry) => (entry.sender ? `${entry.sender}: ${entry.text}` : entry.text)).join('\n').trim()
+    const html = buildChatRecordCopyHtml(entries)
+
+    console.log('[Chat Copy Debug] chat record copy', {
+      messageKey: msg.messageKey,
+      localId: msg.localId,
+      createTime: msg.createTime,
+      localType: msg.localType,
+      xmlType: (msg as any).xmlType || '',
+      appMsgType: (msg as any).appMsgType || '',
+      topLevelCount: recordList.length,
+      topLevelTypes: recordList.map((item) => item?.datatype),
+      topLevelNames: recordList.map((item) => item?.sourcename || item?.chatRecordTitle || item?.datatitle || ''),
+      flattenedLineCount: entries.length,
+      flattenedPreview: entries.slice(0, 20).map((entry) => `${entry.sender ? `${entry.sender}: ` : ''}${entry.text}${entry.imageDataUrl ? ' [image]' : ''}`),
+      resultPreview: text.slice(0, 1000)
+    })
+
+    try {
+      await copyClipboardRichContent(text, html)
+      setCopiedMessageKey(messageKey)
+      setTimeout(() => setCopiedMessageKey(null), 1500)
+    } catch {
+      const fallbackText = text || '[消息]'
+      try {
+        await navigator.clipboard.writeText(fallbackText)
+        setCopiedMessageKey(messageKey)
+        setTimeout(() => setCopiedMessageKey(null), 1500)
+      } catch {
+        const textarea = document.createElement('textarea')
+        textarea.value = fallbackText
+        document.body.appendChild(textarea)
+        textarea.select()
+        document.execCommand('copy')
+        document.body.removeChild(textarea)
+        setCopiedMessageKey(messageKey)
+        setTimeout(() => setCopiedMessageKey(null), 1500)
+      }
+    }
+  }, [buildChatRecordCopyEntries, copyClipboardRichContent])
+
   // 获取消息的可复制文本内容
   const getMessageCopyText = useCallback((msg: Message): string => {
     const localType = msg.localType
+    const xmlType = String((msg as any).xmlType || '')
+    const appMsgType = String((msg as any).appMsgType || '')
+    const isChatRecordMessage = xmlType === '19' || appMsgType === '19' || localType === 81604378673
+
+    if (isChatRecordMessage) {
+      const recordList = resolveCopiedChatRecordList(msg)
+      const lines = flattenChatRecordCopyLines(recordList)
+      return lines.length > 0 ? lines.join('\n') : ''
+    }
+
     if (localType === 1) {
       // 文本消息
       return stripCopiedMessageMeta(cleanMessageContent(msg.parsedContent)) || '[消息]'
@@ -3421,19 +3834,7 @@ function ChatPage(props: ChatPageProps) {
       return nick ? `[名片] ${nick}` : '[名片]'
     }
     if (localType === 49) {
-      const xmlType = (msg as any).xmlType || ''
       // 聊天合集
-      if (xmlType === '19' || String((msg as any).appMsgType) === '19') {
-        const recordList = Array.isArray(msg.chatRecordList) ? msg.chatRecordList : []
-        const title = (msg as any).chatRecordTitle || '聊天合集'
-        const lines: string[] = [`[聊天合集] ${title}`]
-        for (const item of recordList) {
-          const sender = item.sourcename ? `${item.sourcename}: ` : ''
-          const text = stripCopiedMessageMeta(getChatRecordPreviewText(item))
-          lines.push(`${sender}${text}`)
-        }
-        return lines.join('\n')
-      }
       // 引用消息
       if (xmlType === '57') {
         const content = msg.parsedContent || msg.content || ''
@@ -3469,6 +3870,14 @@ function ChatPage(props: ChatPageProps) {
 
   // 复制消息内容
   const handleCopyMessage = useCallback(async (msg: Message, messageKey: string) => {
+    const xmlType = String((msg as any).xmlType || '')
+    const appMsgType = String((msg as any).appMsgType || '')
+    const isChatRecordMessage = xmlType === '19' || appMsgType === '19' || msg.localType === 81604378673
+    if (isChatRecordMessage) {
+      await copyChatRecordMessage(msg, messageKey)
+      return
+    }
+
     const text = getMessageCopyText(msg)
     try {
       await navigator.clipboard.writeText(text)
@@ -3484,12 +3893,20 @@ function ChatPage(props: ChatPageProps) {
       setCopiedMessageKey(messageKey)
       setTimeout(() => setCopiedMessageKey(null), 1500)
     }
-  }, [getMessageCopyText])
+  }, [copyChatRecordMessage, getMessageCopyText])
 
   // 右键菜单 - 复制消息
   const handleContextMenuCopy = useCallback(() => {
     if (contextMenu) {
       const key = getMessageKey(contextMenu.message)
+      console.log('[Chat Copy Debug] context menu copy clicked', {
+        messageKey: key,
+        localId: contextMenu.message.localId,
+        createTime: contextMenu.message.createTime,
+        localType: contextMenu.message.localType,
+        xmlType: (contextMenu.message as any).xmlType,
+        appMsgType: (contextMenu.message as any).appMsgType
+      })
       handleCopyMessage(contextMenu.message, key)
       setContextMenu(null)
     }
