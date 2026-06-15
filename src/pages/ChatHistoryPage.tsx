@@ -8,6 +8,21 @@ import './ChatHistoryPage.scss'
 
 const forwardedImageCache = new Map<string, string>()
 
+function toRenderableImageSrc(path?: string): string | undefined {
+  const raw = String(path || '').trim()
+  if (!raw) return undefined
+  if (/^(data:|blob:|https?:|file:)/i.test(raw)) return raw
+
+  const normalized = raw.replace(/\\/g, '/')
+  if (/^[a-zA-Z]:\//.test(normalized)) {
+    return encodeURI(`file:///${normalized}`)
+  }
+  if (normalized.startsWith('/')) {
+    return encodeURI(`file://${normalized}`)
+  }
+  return raw
+}
+
 export default function ChatHistoryPage() {
   const params = useParams<{ sessionId: string; messageId: string; payloadId: string }>()
   const location = useLocation()
@@ -406,6 +421,34 @@ function ForwardedImage({ item, sessionId }: { item: ChatRecordItem; sessionId: 
   const [loading, setLoading] = useState(!forwardedImageCache.has(cacheKey))
   const [error, setError] = useState(false)
 
+  const handleOpenPreview = async () => {
+    const candidateMd5s = Array.from(new Set([
+      item.thumbfullmd5,
+      item.fullmd5,
+      item.md5
+    ].filter(Boolean) as string[]))
+
+    for (const imageMd5 of candidateMd5s) {
+      const cached = await window.electronAPI.image.resolveCache({ imageMd5, sessionId })
+      if (cached.success && cached.localPath && !(cached as { isThumb?: boolean }).isThumb) {
+        void window.electronAPI.window.openImageViewerWindow(toRenderableImageSrc(cached.localPath) || cached.localPath)
+        return
+      }
+    }
+
+    for (const imageMd5 of candidateMd5s) {
+      const decrypted = await window.electronAPI.image.decrypt({ imageMd5, sessionId, force: true, preferFilePath: true, hardlinkOnly: true })
+      if (decrypted.success && decrypted.localPath && !(decrypted as { isThumb?: boolean }).isThumb) {
+        void window.electronAPI.window.openImageViewerWindow(toRenderableImageSrc(decrypted.localPath) || decrypted.localPath)
+        return
+      }
+    }
+
+    if (localPath) {
+      void window.electronAPI.window.openImageViewerWindow(toRenderableImageSrc(localPath) || localPath)
+    }
+  }
+
   useEffect(() => {
     if (localPath || error) return
 
@@ -485,9 +528,9 @@ function ForwardedImage({ item, sessionId }: { item: ChatRecordItem; sessionId: 
 
   if (localPath) {
     return (
-      <div className="media-content">
+      <button type="button" className="media-content" onClick={handleOpenPreview} title="打开大图">
         <img src={localPath} alt="图片" referrerPolicy="no-referrer" />
-      </div>
+      </button>
     )
   }
 

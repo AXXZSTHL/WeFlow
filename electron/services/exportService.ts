@@ -4193,12 +4193,13 @@ class ExportService {
       const imagesDir = path.join(mediaRootDir, mediaRelativePrefix, 'images')
       await this.ensureExportDir(imagesDir, control, dirCache)
 
-      const tryResolveImagePath = async (imageMd5?: string, imageDatName?: string): Promise<string | null> => {
+      const tryResolveImagePath = async (imageMd5?: string, imageDatName?: string, requireOriginal = false): Promise<string | null> => {
         const localId = Number(msg?.localId || 0)
         if (!imageMd5 && !imageDatName && (!Number.isFinite(localId) || localId <= 0)) return null
         return this.runWithChatImagePipelineLimit(async () => {
           const pickResolvedImagePath = (result: any): string | null => {
             if (!result?.success) return null
+            if (requireOriginal && result.isThumb) return null
             const resolved = String(result.localPath || '').trim()
             return resolved || null
           }
@@ -4231,7 +4232,7 @@ class ExportService {
               imageMd5,
               imageDatName,
               createTime: msg.createTime,
-              force: false,
+              force: requireOriginal,
               preferFilePath: true,
               hardlinkOnly: true,
               allowCacheIndex: true
@@ -4240,7 +4241,7 @@ class ExportService {
             if (decryptedPath) return decryptedPath
           }
 
-          if (Number.isFinite(localId) && localId > 0) {
+          if (!requireOriginal && Number.isFinite(localId) && localId > 0) {
             const fallback = await chatService.getImageData(sessionId, String(localId))
             if (fallback.success && fallback.data) {
               const buffer = Buffer.from(fallback.data, 'base64')
@@ -4255,21 +4256,6 @@ class ExportService {
             console.log(`[Export] 图片本地无数据 (localId=${msg.localId}): imageMd5=${imageMd5 || ''}, imageDatName=${imageDatName || ''}, error=${decryptResult.error || '未知'}`)
           }
 
-          const thumbResult = await imageDecryptService.resolveCachedImage({
-            sessionId,
-            imageMd5,
-            imageDatName,
-            createTime: msg.createTime,
-            preferFilePath: true,
-            hardlinkOnly: true,
-            disableUpdateCheck: true,
-            allowCacheIndex: true,
-            suppressEvents: true
-          })
-          if (thumbResult.success && thumbResult.localPath) {
-            console.log(`[Export] 使用缩略图替代 (localId=${msg.localId}): ${thumbResult.localPath}`)
-            return thumbResult.localPath
-          }
           return null
         })
       }
@@ -4281,7 +4267,7 @@ class ExportService {
       if (initialMissingRunCacheKey && this.mediaRunMissingImageKeys.has(initialMissingRunCacheKey)) {
         return null
       }
-      let sourcePath = await tryResolveImagePath(imageMd5, imageDatName)
+      let sourcePath = await tryResolveImagePath(imageMd5, imageDatName, true)
 
       // 快速流字段存在偏差时，按 localId 强制回填再重试一次，避免“导出进度前进但写入 0”。
       if (!sourcePath) {
@@ -4290,13 +4276,13 @@ class ExportService {
           await this.backfillMediaFieldsFromMessageDetail(sessionId, [msg], new Set([3]), undefined, { force: true })
           imageMd5 = String(msg.imageMd5 || '').trim().toLowerCase() || undefined
           imageDatName = String(msg.imageDatName || '').trim().toLowerCase() || undefined
-          sourcePath = await tryResolveImagePath(imageMd5, imageDatName)
+          sourcePath = await tryResolveImagePath(imageMd5, imageDatName, true)
         }
       }
 
       if (!sourcePath) {
         const missingRunCacheKey = this.getImageMissingRunCacheKey(sessionId, imageMd5, imageDatName)
-        console.log(`[Export] 缩略图也获取失败，所有方式均失败 → 将显示 [图片] 占位符`)
+        console.log(`[Export] 原图获取失败，所有方式均失败 → 将显示 [图片] 占位符`)
         if (missingRunCacheKey) {
           this.mediaRunMissingImageKeys.add(missingRunCacheKey)
         }

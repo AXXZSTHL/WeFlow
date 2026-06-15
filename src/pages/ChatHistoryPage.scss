@@ -124,6 +124,13 @@
         }
 
         .media-content {
+          display: inline-flex;
+          align-items: flex-start;
+          padding: 0;
+          border: 0;
+          background: transparent;
+          cursor: pointer;
+
           img {
             max-width: min(100%, 420px);
             max-height: 320px;
@@ -131,6 +138,11 @@
             display: block;
             box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
             background: color-mix(in srgb, var(--bg-secondary) 88%, transparent);
+          }
+
+          &:focus-visible {
+            outline: 2px solid color-mix(in srgb, var(--primary) 55%, transparent);
+            outline-offset: 2px;
           }
 
           .media-tip {
