@@ -25,6 +25,7 @@ type SettingsTab =
   | 'models'
   | 'cache'
   | 'api'
+  | 'obsidian'
   | 'updates'
   | 'security'
   | 'about'
@@ -47,6 +48,7 @@ const tabs: { id: Exclude<SettingsTab, 'insight' | 'aiFootprint'>; label: string
   { id: 'autoDownload', label: '自动下载', icon: Download },
   { id: 'cache', label: '缓存', icon: HardDrive },
   { id: 'api', label: 'API 服务', icon: Globe },
+  { id: 'obsidian', label: 'Obsidian', icon: Plug },
   { id: 'analytics', label: '分析', icon: BarChart2 },
   { id: 'security', label: '安全', icon: ShieldCheck },
   { id: 'updates', label: '版本更新', icon: RefreshCw },
@@ -275,6 +277,7 @@ function SettingsPage({ onClose }: SettingsPageProps = {}) {
   const [httpApiHost, setHttpApiHost] = useState('127.0.0.1')
   const [httpApiRunning, setHttpApiRunning] = useState(false)
   const [httpApiMediaExportPath, setHttpApiMediaExportPath] = useState('')
+  const [obsidianVaultPath, setObsidianVaultPath] = useState('')
   const [isTogglingApi, setIsTogglingApi] = useState(false)
   const [showApiWarning, setShowApiWarning] = useState(false)
   const [messagePushEnabled, setMessagePushEnabled] = useState(false)
@@ -497,6 +500,9 @@ function SettingsPage({ onClose }: SettingsPageProps = {}) {
 
       const savedApiHost = await configService.getHttpApiHost()
       if (savedApiHost) setHttpApiHost(savedApiHost)
+
+      const savedObsidianVaultPath = await configService.getObsidianVaultPath()
+      if (savedObsidianVaultPath) setObsidianVaultPath(savedObsidianVaultPath)
 
       setAuthEnabled(savedAuthEnabled)
       setAuthUseHello(savedAuthUseHello)
@@ -4946,6 +4952,90 @@ function SettingsPage({ onClose }: SettingsPageProps = {}) {
     </div>
   )
 
+  const renderObsidianTab = () => {
+    return (
+      <div className="tab-content">
+        <div className="form-group">
+          <label>Obsidian 库路径</label>
+          <span className="form-hint">选择 Obsidian 库（Vault）的本地文件夹路径，聊天合集和聊天记录将以 Markdown 格式导出到该库中</span>
+          <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+            <input
+              type="text"
+              className="field-input"
+              value={obsidianVaultPath}
+              placeholder="未绑定，请选择 Obsidian 库文件夹"
+              readOnly
+              style={{ flex: 1 }}
+            />
+            <button
+              className="btn btn-primary"
+              onClick={async () => {
+                try {
+                  const result = await window.electronAPI.dialog.openDirectory({
+                    title: '选择 Obsidian 库（Vault）文件夹',
+                    defaultPath: obsidianVaultPath || undefined,
+                    properties: ['openDirectory', 'createDirectory']
+                  })
+                  if (result && !result.canceled && result.filePaths && result.filePaths.length > 0) {
+                    const folderPath = result.filePaths[0]
+                    setObsidianVaultPath(folderPath)
+                    await configService.setObsidianVaultPath(folderPath)
+                    showMessage('已绑定 Obsidian 库', true)
+                  }
+                } catch (e: any) {
+                  showMessage(`选择文件夹失败: ${e?.message || String(e)}`, false)
+                }
+              }}
+            >
+              <FolderOpen size={16} style={{ marginRight: 4 }} /> 选择文件夹
+            </button>
+            {obsidianVaultPath && (
+              <button
+                className="btn btn-secondary"
+                onClick={async () => {
+                  setObsidianVaultPath('')
+                  await configService.setObsidianVaultPath('')
+                  showMessage('已取消绑定', true)
+                }}
+              >
+                取消绑定
+              </button>
+            )}
+          </div>
+          {obsidianVaultPath && (
+            <div style={{ marginTop: '8px', padding: '8px 12px', background: 'var(--bg-secondary)', borderRadius: '6px', fontSize: '0.85em', color: 'var(--text-secondary)' }}>
+              已绑定库路径: <code style={{ color: 'var(--primary)' }}>{obsidianVaultPath}</code>
+            </div>
+          )}
+        </div>
+
+        <div className="divider" />
+
+        <div className="form-group">
+          <label>导出说明</label>
+          <span className="form-hint">
+            导出至 Obsidian 功能会将聊天合集内容转换为 Markdown 格式（.md 文件），直接保存到绑定的 Obsidian 库中。
+            文件包含 YAML Frontmatter 元数据，兼容 Obsidian 的笔记管理特性。
+          </span>
+        </div>
+
+        <div className="form-group">
+          <label>使用方式</label>
+          <div className="api-docs">
+            <div className="api-item">
+              <div className="api-desc" style={{ margin: 0 }}>
+                1. 点击上方按钮选择你的 Obsidian 库（Vault）文件夹<br />
+                2. 在聊天页面，右键点击聊天合集消息<br />
+                3. 选择"导出至 Obsidian"<br />
+                4. 文件将自动保存到库中，在 Obsidian 中即可查看
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   const handleSetupHello = async () => {
     if (!helloPassword) {
       showMessage('请输入当前密码以开启 Hello', false)
@@ -5643,6 +5733,7 @@ function SettingsPage({ onClose }: SettingsPageProps = {}) {
             {activeTab === 'models' && renderModelsTab()}
             {activeTab === 'cache' && renderCacheTab()}
             {activeTab === 'api' && renderApiTab()}
+            {activeTab === 'obsidian' && renderObsidianTab()}
             {activeTab === 'aiCommon' && renderAiCommonTab()}
             {activeTab === 'insight' && renderInsightTab()}
             {activeTab === 'aiFootprint' && renderAiFootprintTab()}

@@ -90,7 +90,7 @@ type SessionLayout = 'shared' | 'per-session'
 
 type DisplayNamePreference = 'group-nickname' | 'remark' | 'nickname'
 
-type TextExportFormat = 'chatlab' | 'chatlab-jsonl' | 'json' | 'arkme-json' | 'html' | 'txt' | 'excel' | 'weclone' | 'sql'
+type TextExportFormat = 'chatlab' | 'chatlab-jsonl' | 'json' | 'arkme-json' | 'html' | 'txt' | 'excel' | 'weclone' | 'sql' | 'obsidian'
 type SnsTimelineExportFormat = 'json' | 'html' | 'arkmejson'
 
 interface ExportOptions {
@@ -277,6 +277,7 @@ const getContentTypeLabel = (type: ContentType): string => {
 }
 
 const formatOptions: Array<{ value: TextExportFormat; label: string; desc: string }> = [
+  { value: 'obsidian', label: 'Obsidian', desc: 'Markdown 格式，直接导入 Obsidian 库' },
   { value: 'chatlab', label: 'ChatLab', desc: '标准格式，支持其他软件导入' },
   { value: 'chatlab-jsonl', label: 'ChatLab JSONL', desc: '流式格式，适合大量消息' },
   { value: 'json', label: 'JSON', desc: '详细格式，包含完整消息信息' },
@@ -6102,8 +6103,15 @@ function ExportPage() {
   }, [])
 
   const createTask = async () => {
-    if (!exportDialog.open || !exportFolder) return
+    const isObsidianFormat = options.format === 'obsidian'
+    const obsidianVaultPath = isObsidianFormat ? await configService.getObsidianVaultPath() : ''
+    const effectiveOutputDir = isObsidianFormat && obsidianVaultPath ? obsidianVaultPath : exportFolder
+    if (!exportDialog.open || !effectiveOutputDir) return
     if (exportDialog.scope !== 'sns' && exportDialog.sessionIds.length === 0) return
+    if (isObsidianFormat && !obsidianVaultPath) {
+      window.alert('请先在设置中绑定 Obsidian 库路径')
+      return
+    }
 
     const effectiveRangeSelection = resolveDynamicExportSelection(timeRangeSelection, new Date())
     if (!areExportSelectionsEqual(effectiveRangeSelection, timeRangeSelection)) {
@@ -6180,7 +6188,7 @@ function ExportPage() {
       enqueueExportTask(title, {
           sessionIds: exportDialog.sessionIds,
           sessionNames: exportDialog.sessionNames,
-          outputDir: exportFolder,
+          outputDir: effectiveOutputDir,
           options: exportOptions,
           scope: exportDialog.scope,
           source: 'manual',
@@ -6191,6 +6199,7 @@ function ExportPage() {
     }
 
     await configService.setExportDefaultFormat(options.format)
+    setExportDefaultFormat(options.format)
     await configService.setExportDefaultAvatars(options.exportAvatars)
     await configService.setExportDefaultMedia({
       images: options.exportImages,
@@ -7893,7 +7902,9 @@ function ExportPage() {
   ), [filteredContacts, sessionRowByUsername])
   const isAllVisibleSelected = visibleSelectableCount > 0 && selectedCount === visibleSelectableCount
 
-  const canCreateTask = exportDialog.scope === 'sns'
+  const canCreateTask = options.format === 'obsidian'
+    ? exportDialog.sessionIds.length > 0
+    : exportDialog.scope === 'sns'
     ? Boolean(exportFolder)
     : Boolean(exportFolder) && exportDialog.sessionIds.length > 0
   const isAutomationCreateDialog = exportDialog.intent === 'automation-create'
@@ -8672,6 +8683,8 @@ function ExportPage() {
   const handleExportDefaultsChanged = useCallback((patch: ExportDefaultsSettingsPatch) => {
     if (patch.format) {
       setExportDefaultFormat(patch.format as TextExportFormat)
+      configService.setExportDefaultFormat(patch.format).catch(() => {})
+      setOptions(prev => ({ ...prev, format: patch.format as TextExportFormat }))
     }
     if (typeof patch.avatars === 'boolean') {
       setExportDefaultAvatars(patch.avatars)
@@ -10282,6 +10295,8 @@ function ExportPage() {
                                 className={`dialog-format-option ${options.format === option.value ? 'active' : ''}`}
                                 onClick={() => {
                                   setOptions(prev => ({ ...prev, format: option.value as TextExportFormat }))
+                                  setExportDefaultFormat(option.value as TextExportFormat)
+                                  configService.setExportDefaultFormat(option.value).catch(() => {})
                                   setShowSessionFormatSelect(false)
                                 }}
                               >
@@ -10315,6 +10330,8 @@ function ExportPage() {
                               setSnsExportFormat(option.value as SnsTimelineExportFormat)
                             } else {
                               setOptions(prev => ({ ...prev, format: option.value as TextExportFormat }))
+                              setExportDefaultFormat(option.value as TextExportFormat)
+                              configService.setExportDefaultFormat(option.value).catch(() => {})
                             }
                           }}
                         >

@@ -494,6 +494,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('export:exportChatRecordToWord', payload, outputPath),
     exportChatRecordToHtml: (payload: any, outputPath: string) =>
       ipcRenderer.invoke('export:exportChatRecordToHtml', payload, outputPath),
+    exportChatRecordToObsidian: (payload: any) =>
+      ipcRenderer.invoke('export:exportChatRecordToObsidian', payload),
     exportContacts: (outputDir: string, options: any) =>
       ipcRenderer.invoke('export:exportContacts', outputDir, options),
     onProgress: (callback: (payload: {

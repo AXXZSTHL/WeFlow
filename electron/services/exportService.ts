@@ -7064,6 +7064,108 @@ ${itemsHtml}
     }
   }
 
+  async exportChatRecordToObsidian(
+    payload: { title?: string; recordList?: ForwardChatRecordItem[]; includeTime?: boolean; sessionId?: string; vaultPath?: string; folderPath?: string },
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const title = String(payload?.title || '聊天合集').trim() || '聊天合集'
+      const recordList = Array.isArray(payload?.recordList) ? payload.recordList : []
+      const includeTime = payload?.includeTime !== false
+      const vaultPath = String(payload?.vaultPath || '').trim()
+      const folderPath = String(payload?.folderPath || '').trim()
+
+      if (!vaultPath) return { success: false, error: '未配置 Obsidian 库路径，请在设置中绑定 Obsidian 库文件夹' }
+      if (recordList.length === 0) return { success: false, error: '聊天合集为空，无法导出' }
+
+      const safeTitle = title.replace(/[\\/:*?"<>|]/g, '_').slice(0, 80)
+      const now = new Date()
+      const pad = (n: number) => String(n).padStart(2, '0')
+      const dateStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+
+      let outputDir = vaultPath
+      if (folderPath) {
+        outputDir = path.join(vaultPath, folderPath)
+      }
+      const outputPath = path.join(outputDir, `${safeTitle}.md`)
+
+      // 收集图片并转为 base64 data URI
+      const imageMap = new Map<number, string>()
+      let imageIndex = 0
+      const collectImages = (items: ForwardChatRecordItem[]) => {
+        for (const item of items) {
+          if ((item.datatype === 2 || item.datatype === 3) && item._imageBase64) {
+            const mime = item._imageMime || 'image/jpeg'
+            imageMap.set(imageIndex, `data:${mime};base64,${item._imageBase64}`)
+          }
+          imageIndex++
+          if (item.chatRecordList && item.chatRecordList.length > 0) {
+            collectImages(item.chatRecordList)
+          }
+        }
+      }
+      collectImages(recordList)
+
+      const escapeMarkdown = (text: string): string => {
+        return text.replace(/[\\`*_{}[\]()#+\-.!|<>~]/g, '\\$&')
+      }
+
+      let mdImageIdx = 0
+      const buildMdItem = (item: ForwardChatRecordItem, depth: number): string => {
+        const indent = '  '.repeat(Math.min(depth, 8))
+        const time = this.formatForwardChatRecordTime(item.sourcetime)
+        const sender = String(item.sourcename || '').trim()
+        const timeStr = includeTime && time ? ` *${time}*` : ''
+
+        if (item.chatRecordList && item.chatRecordList.length > 0) {
+          const nestedTitle = item.chatRecordTitle || item.datatitle || item.chatRecordDesc || '聊天合集'
+          const nestedItems = item.chatRecordList.map((child) => buildMdItem(child, depth + 1)).join('\n')
+          return `${indent}> **${escapeMarkdown(nestedTitle)}** (${item.chatRecordList.length} 条)\n${indent}>\n${nestedItems}`
+        }
+
+        let content = ''
+        if ((item.datatype === 2 || item.datatype === 3) && imageMap.has(mdImageIdx)) {
+          content = `![图片](${imageMap.get(mdImageIdx)})`
+        } else {
+          const text = this.formatForwardChatRecordItemText(item)
+          content = escapeMarkdown(text)
+        }
+        mdImageIdx++
+
+        if (sender) {
+          return `${indent}- **${escapeMarkdown(sender)}**${timeStr} : ${content}`
+        }
+        return `${indent}- ${content}`
+      }
+
+      const itemsMd = recordList.map((item) => buildMdItem(item, 0)).join('\n')
+
+      const frontMatter = [
+        '---',
+        `title: "${title.replace(/"/g, '\\"')}"`,
+        `date: ${dateStr}`,
+        `source: weflow`,
+        `type: chat-record`,
+        '---',
+        ''
+      ].join('\n')
+
+      const metadata = [
+        `# ${title}`,
+        '',
+        `> 共 ${recordList.length} 条聊天记录 | 导出时间: ${dateStr}`,
+        '',
+      ].join('\n')
+
+      const md = [frontMatter, metadata, itemsMd].join('\n')
+
+      await fs.promises.mkdir(outputDir, { recursive: true })
+      await fs.promises.writeFile(outputPath, md, 'utf-8')
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
   private buildDocxContentTypesXml(hasImages?: boolean): string {
     const imageOverride = hasImages
       ? '<Default Extension="jpg" ContentType="image/jpeg"/><Default Extension="png" ContentType="image/png"/>'
@@ -9212,6 +9314,173 @@ ${itemsHtml}
   }
 
   /**
+   * 导出单个会话为 Obsidian Markdown 格式
+   */
+  async exportSessionToObsidian(
+    sessionId: string,
+    outputPath: string,
+    options: ExportOptions,
+    onProgress?: (progress: ExportProgress) => void,
+    control?: ExportTaskControl
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      this.throwIfStopRequested(control)
+      const conn = await this.ensureConnected()
+      if (!conn.success || !conn.cleanedWxid) return { success: false, error: conn.error }
+
+      const cleanedMyWxid = conn.cleanedWxid
+      const isGroup = sessionId.includes('@chatroom')
+      const rawMyWxid = this.getConfiguredMyWxid()
+      const sessionInfo = await this.getContactInfo(sessionId)
+      const myInfo = await this.getContactInfo(cleanedMyWxid)
+
+      const contactCache = new Map<string, { success: boolean; contact?: any; error?: string }>()
+      const getContactCached = async (username: string) => {
+        if (contactCache.has(username)) return contactCache.get(username)!
+        const result = await wcdbService.getContact(username)
+        contactCache.set(username, result)
+        return result
+      }
+
+      onProgress?.({ current: 0, total: 100, currentSession: sessionInfo.displayName, phase: 'preparing' })
+
+      const collectParams = this.resolveCollectParams(options)
+      const collectProgressReporter = this.createCollectProgressReporter(sessionInfo.displayName, onProgress, 5)
+      const collected = await this.collectMessages(
+        sessionId, cleanedMyWxid, options.dateRange, options.senderUsername,
+        collectParams.mode, collectParams.targetMediaTypes, control, collectProgressReporter
+      )
+      const totalMessages = collected.rows.length
+      if (totalMessages === 0) {
+        return { success: false, error: await this.buildNoMessagesError(sessionId, collected) }
+      }
+
+      await this.hydrateEmojiCaptionsForMessages(sessionId, collected.rows, control)
+
+      const senderUsernames = new Set<string>()
+      for (const msg of collected.rows) {
+        if (msg.senderUsername) senderUsernames.add(msg.senderUsername)
+      }
+      senderUsernames.add(sessionId)
+      await this.preloadContacts(senderUsernames, contactCache)
+
+      const groupNicknameCandidates = isGroup
+        ? this.buildGroupNicknameIdCandidates([
+          ...Array.from(senderUsernames.values()),
+          ...collected.rows.map(msg => msg.senderUsername),
+          cleanedMyWxid, rawMyWxid
+        ])
+        : []
+      const groupNicknamesMap = isGroup
+        ? await this.getGroupNicknamesForRoom(sessionId, groupNicknameCandidates)
+        : new Map<string, string>()
+
+      const sortedMessages = collected.rows
+      const senderProfileCache = new Map<string, ExportDisplayProfile>()
+
+      const lines: string[] = []
+      const escapeMd = (text: string): string => text.replace(/[\\`*_{}[\]()#+\-.!|<>~]/g, '\\$&')
+
+      // 标题和 Frontmatter
+      const now = new Date()
+      const pad = (n: number) => String(n).padStart(2, '0')
+      const dateStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+
+      lines.push('---')
+      lines.push(`title: "${sessionInfo.displayName.replace(/"/g, '\\"')}"`)
+      lines.push(`date: ${dateStr}`)
+      lines.push(`sessionId: "${sessionId}"`)
+      lines.push('type: chat-export')
+      lines.push('---')
+      lines.push('')
+      lines.push(`# ${sessionInfo.displayName}`)
+      lines.push('')
+      lines.push(`> 共 ${totalMessages} 条消息 | 导出时间: ${dateStr}`)
+      lines.push('')
+
+      let lastDay = ''
+      for (let i = 0; i < totalMessages; i++) {
+        if ((i & 0xff) === 0) this.throwIfStopRequested(control)
+
+        const msg = sortedMessages[i]
+        const ts = Number(msg.createTime)
+        let day = ''
+        if (ts > 0) {
+          const d = new Date(ts > 1e12 ? ts : ts * 1000)
+          if (!Number.isNaN(d.getTime())) {
+            day = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+          }
+        }
+        if (day && day !== lastDay) {
+          lines.push(`## ${day}`)
+          lines.push('')
+          lastDay = day
+        }
+
+        let sender = ''
+        if (isGroup) {
+          const senderProfileKey = `${msg.isSend ? cleanedMyWxid : (msg.senderUsername || cleanedMyWxid)}::${msg.isSend ? '1' : '0'}`
+          let senderProfile = senderProfileCache.get(senderProfileKey)
+          if (!senderProfile) {
+            senderProfile = await this.resolveExportDisplayProfile(
+              msg.isSend ? cleanedMyWxid : (msg.senderUsername || cleanedMyWxid),
+              options.displayNamePreference,
+              getContactCached, groupNicknamesMap,
+              msg.isSend ? (myInfo.displayName || cleanedMyWxid) : (msg.senderUsername || ''),
+              msg.isSend ? [rawMyWxid, cleanedMyWxid] : []
+            )
+            senderProfileCache.set(senderProfileKey, senderProfile)
+          }
+          sender = senderProfile.displayName
+        } else if (msg.isSend) {
+          sender = '我'
+        } else {
+          sender = sessionInfo.displayName || sessionId
+        }
+
+        const content = this.formatPlainExportContent(
+          msg.content, msg.localType,
+          { exportVoiceAsText: false },
+          undefined, cleanedMyWxid, msg.senderUsername, msg.isSend, msg.emojiCaption
+        ) || '[消息]'
+
+        let timeStr = ''
+        if (ts > 0) {
+          const d = new Date(ts > 1e12 ? ts : ts * 1000)
+          if (!Number.isNaN(d.getTime())) {
+            timeStr = ` ${pad(d.getHours())}:${pad(d.getMinutes())}`
+          }
+        }
+        lines.push(`- **${escapeMd(sender)}**${timeStr} : ${escapeMd(content)}`)
+
+        if ((i + 1) % 500 === 0) {
+          onProgress?.({
+            current: 50 + Math.floor((i + 1) / totalMessages * 45),
+            total: 100,
+            currentSession: sessionInfo.displayName,
+            phase: 'exporting',
+            estimatedTotalMessages: totalMessages,
+            exportedMessages: i + 1
+          })
+        }
+      }
+
+      onProgress?.({ current: 97, total: 100, currentSession: sessionInfo.displayName, phase: 'writing' })
+      this.throwIfStopRequested(control)
+
+      await fs.promises.mkdir(path.dirname(outputPath), { recursive: true })
+      await fs.promises.writeFile(outputPath, lines.join('\n'), 'utf-8')
+
+      onProgress?.({ current: 100, total: 100, currentSession: sessionInfo.displayName, phase: 'complete' })
+      return { success: true }
+    } catch (e) {
+      if (this.isStopError(e)) return { success: false, error: '导出任务已停止' }
+      if (this.isPauseError(e)) return { success: false, error: '导出任务已暂停' }
+      return { success: false, error: String(e) }
+    }
+  }
+
+  /**
    * 导出单个会话为 WeClone CSV 格式
    */
   async exportSessionToWeCloneCsv(
@@ -11105,11 +11374,24 @@ ${itemsHtml}
 
           const fileNamingMode = this.normalizeFileNamingMode(effectiveOptions.fileNamingMode)
           const safeName = this.buildSessionExportBaseName(sessionId, sessionInfo.displayName, effectiveOptions)
-          const sessionNameWithTypePrefix = effectiveOptions.sessionNameWithTypePrefix !== false
-          const sessionTypePrefix = sessionNameWithTypePrefix ? await this.getSessionFilePrefix(sessionId) : ''
-          const fileNameWithPrefix = `${sessionTypePrefix}${safeName}`
+          const isObsidianFormat = effectiveOptions.format === 'obsidian'
+          let fileNameWithPrefix: string
+          let sessionDirName: string
+          if (isObsidianFormat) {
+            // Obsidian 格式直接使用群名/用户昵称 + 日期，不加类型前缀
+            const displayName = this.sanitizeExportFileNamePart(sessionInfo.displayName) || safeName
+            const pad = (n: number) => String(n).padStart(2, '0')
+            const now = new Date()
+            const dateTag = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+            fileNameWithPrefix = `${displayName}_${dateTag}`
+            sessionDirName = displayName
+          } else {
+            const sessionNameWithTypePrefix = effectiveOptions.sessionNameWithTypePrefix !== false
+            const sessionTypePrefix = sessionNameWithTypePrefix ? await this.getSessionFilePrefix(sessionId) : ''
+            fileNameWithPrefix = `${sessionTypePrefix}${safeName}`
+            sessionDirName = sessionNameWithTypePrefix ? `${sessionTypePrefix}${safeName}` : safeName
+          }
           const useSessionFolder = sessionLayout === 'per-session'
-          const sessionDirName = sessionNameWithTypePrefix ? `${sessionTypePrefix}${safeName}` : safeName
           const sessionDir = useSessionFolder ? path.join(exportBaseDir, sessionDirName) : exportBaseDir
 
           if (useSessionFolder) {
@@ -11122,6 +11404,7 @@ ${itemsHtml}
           else if (effectiveOptions.format === 'txt') ext = '.txt'
           else if (effectiveOptions.format === 'weclone') ext = '.csv'
           else if (effectiveOptions.format === 'html') ext = '.html'
+          else if (effectiveOptions.format === 'obsidian') ext = '.md'
           const preferredOutputPath = path.join(sessionDir, `${fileNameWithPrefix}${ext}`)
           const canTrySkipUnchanged = canTrySkipUnchangedTextSessions &&
             typeof messageCountHint === 'number' &&
@@ -11156,7 +11439,7 @@ ${itemsHtml}
             }
           }
 
-          const outputPath = fileNamingMode === 'date-range'
+          const outputPath = (fileNamingMode === 'date-range' || effectiveOptions.format === 'obsidian')
             ? await this.reserveUniqueOutputPath(preferredOutputPath, reservedOutputPaths)
             : preferredOutputPath
 
@@ -11173,6 +11456,8 @@ ${itemsHtml}
             result = await this.exportSessionToWeCloneCsv(sessionId, outputPath, effectiveOptions, sessionProgress, control)
           } else if (effectiveOptions.format === 'html') {
             result = await this.exportSessionToHtml(sessionId, outputPath, effectiveOptions, sessionProgress, control)
+          } else if (effectiveOptions.format === 'obsidian') {
+            result = await this.exportSessionToObsidian(sessionId, outputPath, effectiveOptions, sessionProgress, control)
           } else {
             result = { success: false, error: `不支持的格式: ${effectiveOptions.format}` }
           }

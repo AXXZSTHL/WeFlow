@@ -1146,6 +1146,10 @@ export interface ElectronAPI {
       success: boolean
       error?: string
     }>
+    exportChatRecordToObsidian: (payload: { title?: string; recordList: ChatRecordItem[]; includeTime?: boolean; sessionId?: string; vaultPath?: string; folderPath?: string }) => Promise<{
+      success: boolean
+      error?: string
+    }>
     exportContacts: (outputDir: string, options: { format: 'json' | 'csv' | 'vcf'; exportAvatars: boolean; contactTypes: { friends: boolean; groups: boolean; officials: boolean }; selectedUsernames?: string[] }) => Promise<{
       success: boolean
       successCount?: number
@@ -1312,7 +1316,7 @@ export interface ElectronAPI {
 }
 
 export interface ExportOptions {
-  format: 'chatlab' | 'chatlab-jsonl' | 'json' | 'arkme-json' | 'html' | 'txt' | 'excel' | 'weclone' | 'sql'
+  format: 'chatlab' | 'chatlab-jsonl' | 'json' | 'arkme-json' | 'html' | 'txt' | 'excel' | 'weclone' | 'sql' | 'obsidian'
   contentType?: 'text' | 'voice' | 'image' | 'video' | 'emoji' | 'file'
   dateRange?: { start: number; end: number } | null
   senderUsername?: string

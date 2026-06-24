@@ -128,7 +128,9 @@ export const CONFIG_KEYS = {
   AI_REPLY_PROMPT: 'aiReplyPrompt',
   AI_REPLY_ROLES: 'aiReplyRoles',
   AUTO_DOWNLOAD_HIGH_RES: 'autoDownloadHighRes',
-  AUTO_DOWNLOAD_WHITELIST: 'autoDownloadWhitelist'
+  AUTO_DOWNLOAD_WHITELIST: 'autoDownloadWhitelist',
+
+  OBSIDIAN_VAULT_PATH: 'obsidianVaultPath'
 } as const
 
 export interface WxidConfig {
@@ -2217,5 +2219,14 @@ export async function getAutoDownloadWhitelist(): Promise<string[]> {
 export async function setAutoDownloadWhitelist(list: string[]): Promise<void> {
   const normalized = Array.from(new Set((list || []).map(item => String(item || '').trim()).filter(Boolean)))
   await config.set(CONFIG_KEYS.AUTO_DOWNLOAD_WHITELIST, normalized)
+}
+
+export async function getObsidianVaultPath(): Promise<string> {
+  const value = await config.get(CONFIG_KEYS.OBSIDIAN_VAULT_PATH)
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+export async function setObsidianVaultPath(vaultPath: string): Promise<void> {
+  await config.set(CONFIG_KEYS.OBSIDIAN_VAULT_PATH, vaultPath || '')
 }
 

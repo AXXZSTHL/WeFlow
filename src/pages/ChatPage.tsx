@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Search, MessageSquare, AlertCircle, Loader2, RefreshCw, X, ChevronDown, ChevronUp, ChevronLeft, Info, Calendar, Database, Hash, Play, Pause, Image as ImageIcon, Mic, CheckCircle, Copy, Check, CheckSquare, Download, FileText, BarChart3, Edit2, Trash2, BellOff, Users, FolderClosed, UserCheck, Crown, Aperture, Newspaper, Bot, Send } from 'lucide-react'
+import { Search, MessageSquare, AlertCircle, Loader2, RefreshCw, X, ChevronDown, ChevronUp, ChevronLeft, Info, Calendar, Database, Hash, Play, Pause, Image as ImageIcon, Mic, CheckCircle, Copy, Check, CheckSquare, Download, FileText, BarChart3, Edit2, Trash2, BellOff, Users, FolderClosed, FolderOpen, UserCheck, Crown, Aperture, Newspaper, Bot, Send } from 'lucide-react'
 
 import { useNavigate, useLocation } from 'react-router-dom'
 import { createPortal } from 'react-dom'
@@ -7783,6 +7783,72 @@ function ChatPage(props: ChatPageProps) {
     if (!result.success) alert(`导出失败: ${result.error || '原因未知'}`)
   }, [contextMenu, currentSessionId, resolveImagesForExport])
 
+  // 导出聊天合集至 Obsidian
+  const handleExportChatRecordToObsidian = useCallback(async () => {
+    const msg = contextMenu?.message
+    if (!msg || !currentSessionId) return
+    const recordList = Array.isArray(msg.chatRecordList) ? msg.chatRecordList : []
+    if (recordList.length === 0) { alert('该聊天合集没有可导出的记录'); setContextMenu(null); return }
+
+    setContextMenu(null)
+
+    const vaultPath = await configService.getObsidianVaultPath()
+    if (!vaultPath) { alert('请先在设置中绑定 Obsidian 库路径'); return }
+
+    const rawTitle = String(msg.chatRecordTitle || '聊天合集').trim() || '聊天合集'
+    const list = await resolveImagesForExport(recordList)
+    const result = await window.electronAPI.export.exportChatRecordToObsidian({
+      title: rawTitle,
+      recordList: list,
+      includeTime: true,
+      sessionId: currentSessionId || undefined,
+      vaultPath
+    })
+    if (!result.success) alert(`导出失败: ${result.error || '原因未知'}`)
+    else alert('已导出到 Obsidian 库')
+  }, [contextMenu, currentSessionId, resolveImagesForExport])
+
+  // 批量导出至 Obsidian
+  const doBatchExportToObsidian = useCallback(async () => {
+    const dialog = batchExportDialog
+    if (!dialog) return
+    setBatchExportDialog(null)
+
+    const vaultPath = await configService.getObsidianVaultPath()
+    if (!vaultPath) { alert('请先在设置中绑定 Obsidian 库路径'); return }
+
+    const selectedRecords = dialog.records.filter((_, i) => dialog.selected.has(i))
+    if (selectedRecords.length === 0) return
+
+    const allItems: any[] = []
+    for (const rec of selectedRecords) {
+      const items = Array.isArray(rec.msg.chatRecordList) ? rec.msg.chatRecordList : []
+      if (items.length > 0) {
+        allItems.push({
+          datatype: 17,
+          sourcename: '',
+          sourcetime: String(rec.msg.createTime || ''),
+          chatRecordTitle: rec.title,
+          chatRecordDesc: `共 ${items.length} 条`,
+          chatRecordList: items
+        })
+      }
+    }
+
+    const sessionName = (currentSession as any)?.displayName || currentSessionId
+    const title = `${sessionName} 的聊天合集`
+    const list = await resolveImagesForExport(allItems)
+    const result = await window.electronAPI.export.exportChatRecordToObsidian({
+      title: `${title}（${selectedRecords.length} 个聊天合集）`,
+      recordList: list,
+      includeTime: dialog.includeTime,
+      sessionId: currentSessionId || undefined,
+      vaultPath
+    })
+    if (!result.success) alert(`导出失败: ${result.error || '原因未知'}`)
+    else alert('已导出到 Obsidian 库')
+  }, [batchExportDialog, currentSessionId, currentSession, resolveImagesForExport])
+
   // 时间选项确认后执行导出
   const handleExportWordWithTimeOption = useCallback(async (includeTime: boolean) => {
     const pending = exportWordPending
@@ -8147,7 +8213,15 @@ function ChatPage(props: ChatPageProps) {
                 onClick={doBatchExport}
                 disabled={batchExportDialog.selected.size === 0 || batchExportDialog.records.length === 0}
               >
-                导出选中（{batchExportDialog.selected.size}）
+                导出 HTML（{batchExportDialog.selected.size}）
+              </button>
+              <button
+                className="btn-primary-filled"
+                style={{ background: 'var(--obsidian-color, #7c3aed)', borderColor: 'var(--obsidian-color, #7c3aed)' }}
+                onClick={doBatchExportToObsidian}
+                disabled={batchExportDialog.selected.size === 0 || batchExportDialog.records.length === 0}
+              >
+                导出至 Obsidian（{batchExportDialog.selected.size}）
               </button>
             </div>
           </div>
@@ -9608,6 +9682,10 @@ function ChatPage(props: ChatPageProps) {
               <div className="menu-item" onClick={handleExportChatRecordToHtml}>
                 <FileText size={16} />
                 <span>导出聊天合集为 HTML</span>
+              </div>
+              <div className="menu-item" onClick={handleExportChatRecordToObsidian}>
+                <FolderOpen size={16} />
+                <span>导出至 Obsidian</span>
               </div>
               </>
             )}

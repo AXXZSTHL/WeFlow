@@ -3443,6 +3443,13 @@ function detectMimeFromBuffer(buffer: Buffer): string {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
   })
+  ipcMain.handle('export:exportChatRecordToObsidian', async (_, payload: any) => {
+    try {
+      return await exportService.exportChatRecordToObsidian(payload || {})
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
 
   ipcMain.handle('export:exportContacts', async (_, outputDir: string, options: any) => {
     const cfg = configService || new ConfigService()
