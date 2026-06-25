@@ -1,8 +1,8 @@
 ﻿import './preload-env'
 import { app, BrowserWindow, ipcMain, nativeTheme, session, Tray, Menu, nativeImage } from 'electron'
 import { Worker } from 'worker_threads'
-import { randomUUID } from 'crypto'
-import { join, dirname } from 'path'
+import { randomUUID, randomBytes } from 'crypto'
+import { join, dirname, basename } from 'path'
 import { autoUpdater } from 'electron-updater'
 import { readFile, writeFile, mkdir, rm, readdir, copyFile } from 'fs/promises'
 import { existsSync } from 'fs'
@@ -16,6 +16,7 @@ import { analyticsService } from './services/analyticsService'
 import { groupAnalyticsService } from './services/groupAnalyticsService'
 import { annualReportService } from './services/annualReportService'
 import { exportService, ExportOptions, ExportProgress } from './services/exportService'
+import * as feishuService from './services/feishuService'
 import { exportTaskControlService } from './services/exportTaskControlService'
 import { KeyService } from './services/keyService'
 import { KeyServiceLinux } from './services/keyServiceLinux'
@@ -3446,6 +3447,67 @@ function detectMimeFromBuffer(buffer: Buffer): string {
   ipcMain.handle('export:exportChatRecordToObsidian', async (_, payload: any) => {
     try {
       return await exportService.exportChatRecordToObsidian(payload || {})
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  // 飞书 OAuth 授权
+  ipcMain.handle('feishu:startOAuth', async (_, payload: { appId: string; appSecret: string }) => {
+    try {
+      const state = randomBytes(16).toString('hex')
+      const authUrl = feishuService.getOAuthUrl(payload.appId, state)
+
+      // 在渲染进程打开浏览器
+      const { shell } = await import('electron')
+      await shell.openExternal(authUrl)
+
+      // 等待本地回调
+      const { code } = await feishuService.startOAuthServer(state)
+
+      // 换取 token
+      const { accessToken, refreshToken } = await feishuService.exchangeCodeForToken(code, payload.appId, payload.appSecret)
+
+      return {
+        success: true,
+        userAccessToken: accessToken,
+        refreshToken,
+      }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  // 飞书导出
+  ipcMain.handle('feishu:exportChatRecord', async (_, payload: any) => {
+    try {
+      return await feishuService.exportChatRecordToFeishu(payload || {})
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  ipcMain.handle('feishu:validateConfig', async (_, payload: any) => {
+    try {
+      return await feishuService.validateFeishuConfig(payload || {})
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  ipcMain.handle('feishu:pushFile', async (_, filePath: string, config: any) => {
+    try {
+      const fs = await import('fs')
+      if (!fs.existsSync(filePath)) {
+        return { success: false, error: `文件不存在: ${filePath}` }
+      }
+      const markdown = fs.readFileSync(filePath, 'utf-8')
+      const title = basename(filePath, '.md')
+      return await feishuService.exportChatRecordToFeishu({
+        title,
+        markdown,
+        config: config || {}
+      })
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }

@@ -1157,6 +1157,32 @@ export interface ElectronAPI {
     }>
     onProgress: (callback: (payload: ExportProgress) => void) => () => void
   }
+  feishu: {
+    startOAuth: (payload: { appId: string; appSecret: string }) => Promise<{
+      success: boolean
+      error?: string
+      userAccessToken?: string
+      refreshToken?: string
+    }>
+    exportChatRecord: (payload: { title: string; markdown: string; config: { userAccessToken?: string; refreshToken?: string; appId?: string; appSecret?: string; folderToken?: string } }) => Promise<{
+      success: boolean
+      error?: string
+      documentUrl?: string
+      newToken?: string
+      newRefreshToken?: string
+    }>
+    validateConfig: (payload: { userAccessToken?: string; refreshToken?: string; appId?: string; appSecret?: string; folderToken?: string }) => Promise<{
+      success: boolean
+      error?: string
+    }>
+    pushFile: (filePath: string, config: { userAccessToken?: string; refreshToken?: string; appId?: string; appSecret?: string; folderToken?: string }) => Promise<{
+      success: boolean
+      error?: string
+      documentUrl?: string
+      newToken?: string
+      newRefreshToken?: string
+    }>
+  }
   whisper: {
     downloadModel: () => Promise<{ success: boolean; modelPath?: string; tokensPath?: string; error?: string }>
     getModelStatus: () => Promise<{ success: boolean; exists?: boolean; modelPath?: string; tokensPath?: string; sizeBytes?: number; error?: string }>
@@ -1316,7 +1342,7 @@ export interface ElectronAPI {
 }
 
 export interface ExportOptions {
-  format: 'chatlab' | 'chatlab-jsonl' | 'json' | 'arkme-json' | 'html' | 'txt' | 'excel' | 'weclone' | 'sql' | 'obsidian'
+  format: 'chatlab' | 'chatlab-jsonl' | 'json' | 'arkme-json' | 'html' | 'txt' | 'excel' | 'weclone' | 'sql' | 'obsidian' | 'feishu'
   contentType?: 'text' | 'voice' | 'image' | 'video' | 'emoji' | 'file'
   dateRange?: { start: number; end: number } | null
   senderUsername?: string

@@ -130,7 +130,13 @@ export const CONFIG_KEYS = {
   AUTO_DOWNLOAD_HIGH_RES: 'autoDownloadHighRes',
   AUTO_DOWNLOAD_WHITELIST: 'autoDownloadWhitelist',
 
-  OBSIDIAN_VAULT_PATH: 'obsidianVaultPath'
+  OBSIDIAN_VAULT_PATH: 'obsidianVaultPath',
+
+  FEISHU_APP_ID: 'feishuAppId',
+  FEISHU_APP_SECRET: 'feishuAppSecret',
+  FEISHU_USER_ACCESS_TOKEN: 'feishuUserAccessToken',
+  FEISHU_REFRESH_TOKEN: 'feishuRefreshToken',
+  FEISHU_FOLDER_TOKEN: 'feishuFolderToken'
 } as const
 
 export interface WxidConfig {
@@ -2228,5 +2234,50 @@ export async function getObsidianVaultPath(): Promise<string> {
 
 export async function setObsidianVaultPath(vaultPath: string): Promise<void> {
   await config.set(CONFIG_KEYS.OBSIDIAN_VAULT_PATH, vaultPath || '')
+}
+
+export async function getFeishuAppId(): Promise<string> {
+  const value = await config.get(CONFIG_KEYS.FEISHU_APP_ID)
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+export async function setFeishuAppId(appId: string): Promise<void> {
+  await config.set(CONFIG_KEYS.FEISHU_APP_ID, appId || '')
+}
+
+export async function getFeishuAppSecret(): Promise<string> {
+  const value = await config.get(CONFIG_KEYS.FEISHU_APP_SECRET)
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+export async function setFeishuAppSecret(secret: string): Promise<void> {
+  await config.set(CONFIG_KEYS.FEISHU_APP_SECRET, secret || '')
+}
+
+export async function getFeishuUserAccessToken(): Promise<string> {
+  const value = await config.get(CONFIG_KEYS.FEISHU_USER_ACCESS_TOKEN)
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+export async function setFeishuUserAccessToken(token: string): Promise<void> {
+  await config.set(CONFIG_KEYS.FEISHU_USER_ACCESS_TOKEN, token || '')
+}
+
+export async function getFeishuRefreshToken(): Promise<string> {
+  const value = await config.get(CONFIG_KEYS.FEISHU_REFRESH_TOKEN)
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+export async function setFeishuRefreshToken(token: string): Promise<void> {
+  await config.set(CONFIG_KEYS.FEISHU_REFRESH_TOKEN, token || '')
+}
+
+export async function getFeishuFolderToken(): Promise<string> {
+  const value = await config.get(CONFIG_KEYS.FEISHU_FOLDER_TOKEN)
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+export async function setFeishuFolderToken(folderToken: string): Promise<void> {
+  await config.set(CONFIG_KEYS.FEISHU_FOLDER_TOKEN, folderToken || '')
 }
 

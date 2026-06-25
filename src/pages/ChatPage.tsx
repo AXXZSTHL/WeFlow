@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Search, MessageSquare, AlertCircle, Loader2, RefreshCw, X, ChevronDown, ChevronUp, ChevronLeft, Info, Calendar, Database, Hash, Play, Pause, Image as ImageIcon, Mic, CheckCircle, Copy, Check, CheckSquare, Download, FileText, BarChart3, Edit2, Trash2, BellOff, Users, FolderClosed, FolderOpen, UserCheck, Crown, Aperture, Newspaper, Bot, Send } from 'lucide-react'
+import { Search, MessageSquare, AlertCircle, Loader2, RefreshCw, X, ChevronDown, ChevronUp, ChevronLeft, Info, Calendar, Database, Hash, Play, Pause, Image as ImageIcon, Mic, CheckCircle, Copy, Check, CheckSquare, Download, FileText, BarChart3, Edit2, Trash2, BellOff, Users, FolderClosed, FolderOpen, Send, UserCheck, Crown, Aperture, Newspaper, Bot } from 'lucide-react'
 
 import { useNavigate, useLocation } from 'react-router-dom'
 import { createPortal } from 'react-dom'
@@ -7808,6 +7808,63 @@ function ChatPage(props: ChatPageProps) {
     else alert('已导出到 Obsidian 库')
   }, [contextMenu, currentSessionId, resolveImagesForExport])
 
+  // 导出聊天合集至飞书
+  const handleExportChatRecordToFeishu = useCallback(async () => {
+    const msg = contextMenu?.message
+    if (!msg || !currentSessionId) return
+    const recordList = Array.isArray(msg.chatRecordList) ? msg.chatRecordList : []
+    if (recordList.length === 0) { alert('该聊天合集没有可导出的记录'); setContextMenu(null); return }
+
+    setContextMenu(null)
+
+    const userAccessToken = await configService.getFeishuUserAccessToken()
+    const refreshToken = await configService.getFeishuRefreshToken()
+    const appId = await configService.getFeishuAppId()
+    const appSecret = await configService.getFeishuAppSecret()
+    const folderToken = await configService.getFeishuFolderToken()
+    if (!userAccessToken && !(appId && appSecret)) { alert('请先在设置中配置飞书 App ID 和 App Secret'); return }
+
+    const rawTitle = String(msg.chatRecordTitle || '聊天合集').trim() || '聊天合集'
+    const list = await resolveImagesForExport(recordList)
+
+    const escapeMd = (text: string) => text.replace(/[\\`*_{}[\]()#+\-.!|<>~]/g, '\\$&')
+    const buildMdItem = (item: any, depth: number): string => {
+      const indent = '  '.repeat(Math.min(depth, 8))
+      const sender = String(item.sourcename || '').trim()
+      const text = String(item.datadesc || item.datatitle || '').trim()
+      const typeLabel =
+        item.datatype === 2 || item.datatype === 3 ? '[图片]' :
+        item.datatype === 4 || item.datatype === 43 ? '[视频]' :
+        item.datatype === 34 ? '[语音]' :
+        item.datatype === 47 ? '[表情包]' : ''
+      const content = typeLabel || text || '[消息]'
+      if (item.chatRecordList?.length > 0) {
+        const nestedTitle = item.chatRecordTitle || item.datatitle || '聊天合集'
+        const nestedItems = item.chatRecordList.map((c: any) => buildMdItem(c, depth + 1)).join('\n')
+        return `${indent}> **${escapeMd(nestedTitle)}** (${item.chatRecordList.length} 条)\n${indent}>\n${nestedItems}`
+      }
+      if (sender) return `${indent}- **${escapeMd(sender)}** : ${escapeMd(content)}`
+      return `${indent}- ${escapeMd(content)}`
+    }
+    const itemsMd = list.map((item: any) => buildMdItem(item, 0)).join('\n')
+    const now = new Date()
+    const pad = (n: number) => String(n).padStart(2, '0')
+    const dateStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+    const markdown = [
+      '---', `title: "${rawTitle.replace(/"/g, '\\"')}"`, `date: ${dateStr}`, 'source: weflow', '---',
+      '', `# ${rawTitle}`, '', `> 共 ${list.length} 条聊天记录 | 导出时间: ${dateStr}`, '', itemsMd,
+    ].join('\n')
+
+    const result = await window.electronAPI.feishu.exportChatRecord({
+      title: rawTitle, markdown,
+      config: { userAccessToken, refreshToken: refreshToken || undefined, appId: appId || undefined, appSecret: appSecret || undefined, folderToken: folderToken || undefined }
+    })
+    if (result.newToken) await configService.setFeishuUserAccessToken(result.newToken)
+    if (result.newRefreshToken) await configService.setFeishuRefreshToken(result.newRefreshToken)
+    if (!result.success) alert(`导出失败: ${result.error || '原因未知'}`)
+    else alert(`已导出到飞书文档\n${result.documentUrl || ''}`)
+  }, [contextMenu, currentSessionId, resolveImagesForExport])
+
   // 批量导出至 Obsidian
   const doBatchExportToObsidian = useCallback(async () => {
     const dialog = batchExportDialog
@@ -7847,6 +7904,90 @@ function ChatPage(props: ChatPageProps) {
     })
     if (!result.success) alert(`导出失败: ${result.error || '原因未知'}`)
     else alert('已导出到 Obsidian 库')
+  }, [batchExportDialog, currentSessionId, currentSession, resolveImagesForExport])
+
+  // 批量导出至飞书
+  const doBatchExportToFeishu = useCallback(async () => {
+    const dialog = batchExportDialog
+    if (!dialog) return
+    setBatchExportDialog(null)
+
+    const userAccessToken = await configService.getFeishuUserAccessToken()
+    const refreshToken = await configService.getFeishuRefreshToken()
+    const appId = await configService.getFeishuAppId()
+    const appSecret = await configService.getFeishuAppSecret()
+    const folderToken = await configService.getFeishuFolderToken()
+    if (!userAccessToken) { alert('请先在设置中完成飞书授权'); return }
+
+    const selectedRecords = dialog.records.filter((_, i) => dialog.selected.has(i))
+    if (selectedRecords.length === 0) return
+
+    const allItems: any[] = []
+    for (const rec of selectedRecords) {
+      const items = Array.isArray(rec.msg.chatRecordList) ? rec.msg.chatRecordList : []
+      if (items.length > 0) {
+        allItems.push({
+          datatype: 17,
+          sourcename: '',
+          sourcetime: String(rec.msg.createTime || ''),
+          chatRecordTitle: rec.title,
+          chatRecordDesc: `共 ${items.length} 条`,
+          chatRecordList: items
+        })
+      }
+    }
+
+    const sessionName = (currentSession as any)?.displayName || currentSessionId
+    const title = `${sessionName} 的聊天合集（${selectedRecords.length} 个）`
+    const list = await resolveImagesForExport(allItems)
+
+    const escapeMd = (text: string) => text.replace(/[\\`*_{}[\]()#+\-.!|<>~]/g, '\\$&')
+    const buildMdItem = (item: any, depth: number): string => {
+      const indent = '  '.repeat(Math.min(depth, 8))
+      const sender = String(item.sourcename || '').trim()
+      const text = String(item.datadesc || item.datatitle || '').trim()
+      const typeLabel =
+        item.datatype === 2 || item.datatype === 3 ? '[图片]' :
+        item.datatype === 4 || item.datatype === 43 ? '[视频]' :
+        item.datatype === 34 ? '[语音]' :
+        item.datatype === 47 ? '[表情包]' : ''
+      const content = typeLabel || text || '[消息]'
+
+      if (item.chatRecordList?.length > 0) {
+        const nestedTitle = item.chatRecordTitle || item.datatitle || '聊天合集'
+        const nestedItems = item.chatRecordList.map((c: any) => buildMdItem(c, depth + 1)).join('\n')
+        return `${indent}> **${escapeMd(nestedTitle)}** (${item.chatRecordList.length} 条)\n${indent}>\n${nestedItems}`
+      }
+      if (sender) return `${indent}- **${escapeMd(sender)}** : ${escapeMd(content)}`
+      return `${indent}- ${escapeMd(content)}`
+    }
+
+    const itemsMd = list.map((item: any) => buildMdItem(item, 0)).join('\n')
+    const now = new Date()
+    const pad = (n: number) => String(n).padStart(2, '0')
+    const dateStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+    const markdown = [
+      '---',
+      `title: "${title.replace(/"/g, '\\"')}"`,
+      `date: ${dateStr}`,
+      'source: weflow',
+      '---',
+      '',
+      `# ${title}`,
+      '',
+      `> 共 ${list.length} 条聊天记录 | 导出时间: ${dateStr}`,
+      '',
+      itemsMd,
+    ].join('\n')
+
+    const result = await window.electronAPI.feishu.exportChatRecord({
+      title, markdown,
+      config: { userAccessToken, refreshToken: refreshToken || undefined, appId: appId || undefined, appSecret: appSecret || undefined, folderToken: folderToken || undefined }
+    })
+    if (result.newToken) await configService.setFeishuUserAccessToken(result.newToken)
+    if (result.newRefreshToken) await configService.setFeishuRefreshToken(result.newRefreshToken)
+    if (!result.success) alert(`导出失败: ${result.error || '原因未知'}`)
+    else alert(`已导出到飞书文档\n${result.documentUrl || ''}`)
   }, [batchExportDialog, currentSessionId, currentSession, resolveImagesForExport])
 
   // 时间选项确认后执行导出
@@ -8222,6 +8363,14 @@ function ChatPage(props: ChatPageProps) {
                 disabled={batchExportDialog.selected.size === 0 || batchExportDialog.records.length === 0}
               >
                 导出至 Obsidian（{batchExportDialog.selected.size}）
+              </button>
+              <button
+                className="btn-primary-filled"
+                style={{ background: 'var(--feishu-color, #3370ff)', borderColor: 'var(--feishu-color, #3370ff)' }}
+                onClick={doBatchExportToFeishu}
+                disabled={batchExportDialog.selected.size === 0 || batchExportDialog.records.length === 0}
+              >
+                导出至飞书（{batchExportDialog.selected.size}）
               </button>
             </div>
           </div>
@@ -9686,6 +9835,10 @@ function ChatPage(props: ChatPageProps) {
               <div className="menu-item" onClick={handleExportChatRecordToObsidian}>
                 <FolderOpen size={16} />
                 <span>导出至 Obsidian</span>
+              </div>
+              <div className="menu-item" onClick={handleExportChatRecordToFeishu}>
+                <Send size={16} />
+                <span>导出至飞书</span>
               </div>
               </>
             )}

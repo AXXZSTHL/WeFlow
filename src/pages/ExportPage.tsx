@@ -90,7 +90,7 @@ type SessionLayout = 'shared' | 'per-session'
 
 type DisplayNamePreference = 'group-nickname' | 'remark' | 'nickname'
 
-type TextExportFormat = 'chatlab' | 'chatlab-jsonl' | 'json' | 'arkme-json' | 'html' | 'txt' | 'excel' | 'weclone' | 'sql' | 'obsidian'
+type TextExportFormat = 'chatlab' | 'chatlab-jsonl' | 'json' | 'arkme-json' | 'html' | 'txt' | 'excel' | 'weclone' | 'sql' | 'obsidian' | 'feishu'
 type SnsTimelineExportFormat = 'json' | 'html' | 'arkmejson'
 
 interface ExportOptions {
@@ -164,6 +164,7 @@ interface ExportTaskPayload {
   automationTaskId?: string
   contentType?: ContentType
   sessionNames: string[]
+  feishuConfig?: { userAccessToken?: string; appId?: string; appSecret?: string; folderToken?: string }
   snsOptions?: {
     format: SnsTimelineExportFormat
     exportImages?: boolean
@@ -278,6 +279,7 @@ const getContentTypeLabel = (type: ContentType): string => {
 
 const formatOptions: Array<{ value: TextExportFormat; label: string; desc: string }> = [
   { value: 'obsidian', label: 'Obsidian', desc: 'Markdown 格式，直接导入 Obsidian 库' },
+  { value: 'feishu', label: '飞书', desc: '通过 API 创建飞书在线文档' },
   { value: 'chatlab', label: 'ChatLab', desc: '标准格式，支持其他软件导入' },
   { value: 'chatlab-jsonl', label: 'ChatLab JSONL', desc: '流式格式，适合大量消息' },
   { value: 'json', label: 'JSON', desc: '详细格式，包含完整消息信息' },
@@ -5943,6 +5945,33 @@ function ExportPage() {
             },
             performance: finalizeTaskPerformance(task, doneAt)
           }))
+
+          if (next.payload.feishuConfig && result.sessionOutputPaths) {
+            const filePaths = Object.values(result.sessionOutputPaths).filter(Boolean) as string[]
+            let pushSuccess = 0
+            let pushFail = 0
+            for (const filePath of filePaths) {
+              try {
+                const pushResult = await window.electronAPI.feishu.pushFile(filePath, next.payload.feishuConfig)
+                if (pushResult.success) {
+                  pushSuccess++
+                } else {
+                  pushFail++
+                  console.error(`飞书推送失败 [${filePath}]:`, pushResult.error)
+                }
+              } catch (e) {
+                pushFail++
+                console.error(`飞书推送异常 [${filePath}]:`, e)
+              }
+            }
+            const phaseLabel = pushFail === 0
+              ? `完成 · 已推送 ${pushSuccess} 个文档到飞书`
+              : `完成 · 飞书推送 ${pushSuccess} 成功 ${pushFail} 失败`
+            updateTask(next.id, task => ({
+              ...task,
+              progress: { ...task.progress, phaseLabel },
+            }))
+          }
         }
       }
     } catch (error) {
@@ -6104,13 +6133,26 @@ function ExportPage() {
 
   const createTask = async () => {
     const isObsidianFormat = options.format === 'obsidian'
+    const isFeishuFormat = options.format === 'feishu'
     const obsidianVaultPath = isObsidianFormat ? await configService.getObsidianVaultPath() : ''
     const effectiveOutputDir = isObsidianFormat && obsidianVaultPath ? obsidianVaultPath : exportFolder
-    if (!exportDialog.open || !effectiveOutputDir) return
+    if (!exportDialog.open || (!effectiveOutputDir && !isFeishuFormat)) return
     if (exportDialog.scope !== 'sns' && exportDialog.sessionIds.length === 0) return
     if (isObsidianFormat && !obsidianVaultPath) {
       window.alert('请先在设置中绑定 Obsidian 库路径')
       return
+    }
+    let feishuConfig: ExportTaskPayload['feishuConfig'] = undefined
+    if (isFeishuFormat) {
+      const appId = await configService.getFeishuAppId()
+      const appSecret = await configService.getFeishuAppSecret()
+      const userAccessToken = await configService.getFeishuUserAccessToken()
+      if (!appId || !appSecret) {
+        window.alert('请先在设置中配置飞书 App ID 和 App Secret')
+        return
+      }
+      const folderToken = await configService.getFeishuFolderToken()
+      feishuConfig = { userAccessToken: userAccessToken || '', appId, appSecret, folderToken: folderToken || undefined }
     }
 
     const effectiveRangeSelection = resolveDynamicExportSelection(timeRangeSelection, new Date())
@@ -6185,14 +6227,19 @@ function ExportPage() {
       setAutomationHint('导出配置已完成，请继续设置自动化规则并保存任务')
       closeExportDialog()
     } else {
+      const finalExportOptions = exportOptions ? { ...exportOptions } : undefined
+      if (isFeishuFormat && finalExportOptions) {
+        finalExportOptions.format = 'obsidian'
+      }
       enqueueExportTask(title, {
           sessionIds: exportDialog.sessionIds,
           sessionNames: exportDialog.sessionNames,
-          outputDir: effectiveOutputDir,
-          options: exportOptions,
+          outputDir: isFeishuFormat ? exportFolder : effectiveOutputDir,
+          options: finalExportOptions,
           scope: exportDialog.scope,
           source: 'manual',
           contentType: exportDialog.contentType,
+          feishuConfig,
           snsOptions
         })
       closeExportDialog()
@@ -7902,7 +7949,7 @@ function ExportPage() {
   ), [filteredContacts, sessionRowByUsername])
   const isAllVisibleSelected = visibleSelectableCount > 0 && selectedCount === visibleSelectableCount
 
-  const canCreateTask = options.format === 'obsidian'
+  const canCreateTask = (options.format === 'obsidian' || options.format === 'feishu')
     ? exportDialog.sessionIds.length > 0
     : exportDialog.scope === 'sns'
     ? Boolean(exportFolder)

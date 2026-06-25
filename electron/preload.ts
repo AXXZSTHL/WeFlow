@@ -517,6 +517,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }
   },
 
+  feishu: {
+    startOAuth: (payload: { appId: string; appSecret: string }) =>
+      ipcRenderer.invoke('feishu:startOAuth', payload),
+    exportChatRecord: (payload: any) =>
+      ipcRenderer.invoke('feishu:exportChatRecord', payload),
+    validateConfig: (payload: any) =>
+      ipcRenderer.invoke('feishu:validateConfig', payload),
+    pushFile: (filePath: string, config: any) =>
+      ipcRenderer.invoke('feishu:pushFile', filePath, config),
+  },
+
   whisper: {
     downloadModel: () =>
       ipcRenderer.invoke('whisper:downloadModel'),

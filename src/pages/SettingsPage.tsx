@@ -12,7 +12,7 @@ import {
   RotateCcw, Trash2, Plug, Check, Sun, Moon, Monitor,
   Palette, Database, HardDrive, Info, RefreshCw, ChevronDown, Download, Mic,
   ShieldCheck, Fingerprint, Lock, KeyRound, Bell, Globe, BarChart2, X, UserRound,
-  Sparkles, Loader2, CheckCircle2, XCircle
+  Sparkles, Loader2, CheckCircle2, XCircle, Send
 } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
 import './SettingsPage.scss'
@@ -26,6 +26,7 @@ type SettingsTab =
   | 'cache'
   | 'api'
   | 'obsidian'
+  | 'feishu'
   | 'updates'
   | 'security'
   | 'about'
@@ -49,6 +50,7 @@ const tabs: { id: Exclude<SettingsTab, 'insight' | 'aiFootprint'>; label: string
   { id: 'cache', label: '缓存', icon: HardDrive },
   { id: 'api', label: 'API 服务', icon: Globe },
   { id: 'obsidian', label: 'Obsidian', icon: Plug },
+  { id: 'feishu', label: '飞书', icon: Send },
   { id: 'analytics', label: '分析', icon: BarChart2 },
   { id: 'security', label: '安全', icon: ShieldCheck },
   { id: 'updates', label: '版本更新', icon: RefreshCw },
@@ -278,6 +280,11 @@ function SettingsPage({ onClose }: SettingsPageProps = {}) {
   const [httpApiRunning, setHttpApiRunning] = useState(false)
   const [httpApiMediaExportPath, setHttpApiMediaExportPath] = useState('')
   const [obsidianVaultPath, setObsidianVaultPath] = useState('')
+  const [feishuAppId, setFeishuAppId] = useState('')
+  const [feishuAppSecret, setFeishuAppSecret] = useState('')
+  const [feishuAuthorized, setFeishuAuthorized] = useState(false)
+  const [feishuFolderToken, setFeishuFolderToken] = useState('')
+  const [feishuAuthorizing, setFeishuAuthorizing] = useState(false)
   const [isTogglingApi, setIsTogglingApi] = useState(false)
   const [showApiWarning, setShowApiWarning] = useState(false)
   const [messagePushEnabled, setMessagePushEnabled] = useState(false)
@@ -503,6 +510,15 @@ function SettingsPage({ onClose }: SettingsPageProps = {}) {
 
       const savedObsidianVaultPath = await configService.getObsidianVaultPath()
       if (savedObsidianVaultPath) setObsidianVaultPath(savedObsidianVaultPath)
+
+      const savedFeishuAppId = await configService.getFeishuAppId()
+      if (savedFeishuAppId) setFeishuAppId(savedFeishuAppId)
+      const savedFeishuAppSecret = await configService.getFeishuAppSecret()
+      if (savedFeishuAppSecret) setFeishuAppSecret(savedFeishuAppSecret)
+      const savedFeishuToken = await configService.getFeishuUserAccessToken()
+      if (savedFeishuToken) setFeishuAuthorized(true)
+      const savedFeishuFolderToken = await configService.getFeishuFolderToken()
+      if (savedFeishuFolderToken) setFeishuFolderToken(savedFeishuFolderToken)
 
       setAuthEnabled(savedAuthEnabled)
       setAuthUseHello(savedAuthUseHello)
@@ -5036,6 +5052,113 @@ function SettingsPage({ onClose }: SettingsPageProps = {}) {
     )
   }
 
+  const renderFeishuTab = () => {
+    return (
+      <div className="tab-content">
+        <div className="form-group">
+          <label>飞书应用配置</label>
+          <span className="form-hint">
+            在飞书开放平台创建自建应用，获取 App ID 和 App Secret。应用需开通 <code>docx:document</code> 权限。
+            填入后即可直接导出，无需额外授权。
+          </span>
+        </div>
+
+        <div className="form-group">
+          <label>App ID</label>
+          <input
+            type="text"
+            className="field-input"
+            value={feishuAppId}
+            placeholder="cli_xxxxxxxxxxxxxxxx"
+            onChange={(e) => {
+              const val = e.target.value.trim()
+              setFeishuAppId(val)
+              scheduleConfigSave('feishuAppId', () => configService.setFeishuAppId(val))
+            }}
+            style={{ fontFamily: 'monospace' }}
+          />
+        </div>
+
+        <div className="form-group">
+          <label>App Secret</label>
+          <input
+            type="password"
+            className="field-input"
+            value={feishuAppSecret}
+            placeholder="飞书应用密钥"
+            onChange={(e) => {
+              const val = e.target.value.trim()
+              setFeishuAppSecret(val)
+              scheduleConfigSave('feishuAppSecret', () => configService.setFeishuAppSecret(val))
+            }}
+            style={{ fontFamily: 'monospace' }}
+          />
+        </div>
+
+        <div className="form-group">
+          <label>目标文件夹 Token（可选）</label>
+          <span className="form-hint">文档将创建在此文件夹下。留空则创建在飞书云空间根目录。</span>
+          <input
+            type="text"
+            className="field-input"
+            value={feishuFolderToken}
+            placeholder="fldcnxxxxxxxxxxxxxxxx（可选）"
+            onChange={(e) => {
+              const val = e.target.value.trim()
+              setFeishuFolderToken(val)
+              scheduleConfigSave('feishuFolderToken', () => configService.setFeishuFolderToken(val))
+            }}
+            style={{ fontFamily: 'monospace' }}
+          />
+        </div>
+
+        <div className="divider" />
+
+        <div className="form-group">
+          <label>问题排查</label>
+          <span className="form-hint">如果 tenant token 方式报权限不足（99991672），可在此完成用户授权作为备用。</span>
+          <button
+            className="btn btn-secondary"
+            onClick={async () => {
+              if (!feishuAppId || !feishuAppSecret) {
+                showMessage('请先填写 App ID 和 App Secret', false)
+                return
+              }
+              setFeishuAuthorizing(true)
+              try {
+                const result = await window.electronAPI.feishu.startOAuth({
+                  appId: feishuAppId,
+                  appSecret: feishuAppSecret,
+                })
+                if (result.success && result.userAccessToken) {
+                  await configService.setFeishuUserAccessToken(result.userAccessToken)
+                  if (result.refreshToken) await configService.setFeishuRefreshToken(result.refreshToken)
+                  setFeishuAuthorized(true)
+                  showMessage('用户授权成功（备用）', true)
+                } else {
+                  showMessage(`授权失败: ${result.error}`, false)
+                }
+              } catch (e: any) {
+                showMessage(`授权失败: ${e?.message || String(e)}`, false)
+              } finally {
+                setFeishuAuthorizing(false)
+              }
+            }}
+            disabled={feishuAuthorizing || !feishuAppId || !feishuAppSecret}
+          >
+            {feishuAuthorizing ? '授权中...' : feishuAuthorized ? '重新授权（备用）' : '用户授权（备用）'}
+          </button>
+          {feishuAuthorized && (
+            <span style={{ marginLeft: 12, color: 'var(--success-color, #22c55e)', fontSize: '0.9em' }}>
+              <CheckCircle2 size={14} style={{ marginRight: 4, verticalAlign: 'middle' }} />
+              已备授权
+            </span>
+          )}
+        </div>
+      </div>
+    )
+  }
+
   const handleSetupHello = async () => {
     if (!helloPassword) {
       showMessage('请输入当前密码以开启 Hello', false)
@@ -5734,6 +5857,7 @@ function SettingsPage({ onClose }: SettingsPageProps = {}) {
             {activeTab === 'cache' && renderCacheTab()}
             {activeTab === 'api' && renderApiTab()}
             {activeTab === 'obsidian' && renderObsidianTab()}
+            {activeTab === 'feishu' && renderFeishuTab()}
             {activeTab === 'aiCommon' && renderAiCommonTab()}
             {activeTab === 'insight' && renderInsightTab()}
             {activeTab === 'aiFootprint' && renderAiFootprintTab()}

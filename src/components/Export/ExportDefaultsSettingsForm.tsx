@@ -32,6 +32,7 @@ const exportFormatOptions = [
   { value: 'excel', label: 'Excel', desc: '电子表格，适合统计分析' },
   { value: 'json', label: 'JSON', desc: '详细格式，包含完整消息信息' },
   { value: 'obsidian', label: 'Obsidian', desc: 'Markdown 格式，直接导入 Obsidian 库' },
+  { value: 'feishu', label: '飞书', desc: '通过 API 创建飞书在线文档' },
   { value: 'html', label: 'HTML', desc: '网页格式，可直接浏览' },
   { value: 'txt', label: 'TXT', desc: '纯文本，通用格式' },
   { value: 'arkme-json', label: 'Arkme JSON', desc: '紧凑 JSON，支持 sender 去重与关系统计' },
